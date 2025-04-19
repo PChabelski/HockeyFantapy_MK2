@@ -7,6 +7,8 @@ from datetime import datetime
 from datetime import timedelta
 import pandas as pd
 import numpy as np
+from generic import year_instance
+
 
 pd.options.display.float_format = '{:,}'.format
 np.seterr(divide='ignore')
@@ -17,7 +19,7 @@ logging.getLogger("yfpy.query").setLevel(level=logging.INFO)
 current_directory = os.getcwd()
 
 print("GOOD DAY! FANTASY HOCKEY 2024 VERSION")
-with open(f'{current_directory}control_file.json', 'r') as f:
+with open(f'{current_directory}/control_file.json', 'r') as f:
     control_file = json.loads(f.read())
 
 # I can move these into the generalized system
@@ -29,3 +31,5 @@ years_to_check = control_file['Years']
 years_to_check = [int(x) for x in years_to_check.keys() if years_to_check[x]['status'] == "RUN"]
 print(f'Running the following years: {years_to_check}')
 # ============================================================================================
+for year in years_to_check:
+    year_instance(control_file, current_directory, year)
