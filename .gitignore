@@ -3,5 +3,5 @@
 *.iml
 out
 gen
-private
+private/
 control_file.json
