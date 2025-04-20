@@ -1,0 +1,7 @@
+# Ignote files and directories that should not be tracked by Git
+.idea
+*.iml
+out
+gen
+private
+control_file.json

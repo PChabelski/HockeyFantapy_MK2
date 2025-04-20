@@ -32,4 +32,5 @@ years_to_check = [int(x) for x in years_to_check.keys() if years_to_check[x]['st
 print(f'Running the following years: {years_to_check}')
 # ============================================================================================
 for year in years_to_check:
-    YEAR_INSTANCE(control_file, current_directory, year)
+    yahoo_api_instance = YEAR_INSTANCE(control_file, current_directory, year)
+    yahoo_api_instance.extract_yahoo_league_metadata()
