@@ -6,4 +6,4 @@ private/
 control_file.json
 __pycache__/
 __pycache__/generic.cpython-312.pyc
-metadata/
+league_metadata/

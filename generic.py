@@ -51,16 +51,16 @@ class YEAR_INSTANCE:
         # print('League Info:')
         # print(self.league_info)
         print('League Metadata:')
-        print(self.league_metadata.keys())
+        print(self.league_metadata)
         df_league_metadata = pd.DataFrame(columns = self.league_metadata.keys())
         league_metadata_tuple = ()
         for column in self.league_metadata.keys():
             league_metadata_tuple = league_metadata_tuple + (self.league_metadata[column],)
         df_league_metadata.loc[len(df_league_metadata)]= league_metadata_tuple
-        if not os.path.exists(f'{self.current_directory}/metadata'):
-            os.mkdir(f'{self.current_directory}/metadata')
+        if not os.path.exists(f'{self.current_directory}/league_metadata'):
+            os.mkdir(f'{self.current_directory}/league_metadata')
 
-        df_league_metadata.to_csv(f'{self.current_directory}/metadata/league_metadata.csv', index=False)
+        df_league_metadata.to_csv(f'{self.current_directory}/league_metadata/{self.year}_league_metadata.csv', index=False)
         # print('League Standings:')
         # print(self.league_standings)
         # print('League Teams:')
