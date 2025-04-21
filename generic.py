@@ -44,25 +44,29 @@ class YEAR_INSTANCE:
 
         self.league_info = self.query.get_league_info()
         self.league_metadata = self.query.get_league_metadata().clean_data_dict()
-        self.league_standings = self.query.get_league_standings()
+        self.league_standings = self.query.get_league_standings().clean_data_dict()
         self.league_teams = self.query.get_league_teams()
 
-        # print('Metadata extracted successfully')
-        # print('League Info:')
-        # print(self.league_info)
-        print('League Metadata:')
-        print(self.league_metadata)
-        df_league_metadata = pd.DataFrame(columns = self.league_metadata.keys())
-        league_metadata_tuple = ()
-        for column in self.league_metadata.keys():
-            league_metadata_tuple = league_metadata_tuple + (self.league_metadata[column],)
-        df_league_metadata.loc[len(df_league_metadata)]= league_metadata_tuple
-        if not os.path.exists(f'{self.current_directory}/league_metadata'):
-            os.mkdir(f'{self.current_directory}/league_metadata')
 
-        df_league_metadata.to_csv(f'{self.current_directory}/league_metadata/{self.year}_league_metadata.csv', index=False)
-        # print('League Standings:')
-        # print(self.league_standings)
+        # print('League Metadata:')
+        # print(self.league_metadata)
+        # df_league_metadata = pd.DataFrame(columns = self.league_metadata.keys())
+        # league_metadata_tuple = ()
+        # for column in self.league_metadata.keys():
+        #     league_metadata_tuple = league_metadata_tuple + (self.league_metadata[column],)
+        # df_league_metadata.loc[len(df_league_metadata)]= league_metadata_tuple
+        # if not os.path.exists(f'{self.current_directory}/league_metadata'):
+        #     os.mkdir(f'{self.current_directory}/league_metadata')
+        # df_league_metadata.to_csv(f'{self.current_directory}/league_metadata/{self.year}_league_metadata.csv', index=False)
+
+
+        print('League Standings:')
+        print(len(self.league_standings['teams']))
+        for i in range(0,len(self.league_standings['teams'])):
+            print(self.league_standings['teams'][i]['team'].clean_data_dict())
+
+
+
         # print('League Teams:')
         # print(self.league_teams)
 
