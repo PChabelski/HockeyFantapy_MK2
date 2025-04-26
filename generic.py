@@ -135,4 +135,40 @@ class YEAR_INSTANCE:
 
 
     def extract_yahoo_league_standings(self):
-        self.league_standings = self.query.get_league_standings().clean_data_dict()
+
+        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        # 2012 the API CANNOT PARSE THE TEAMS; MANUALLY GENERATE INSTEAD!
+        if self.year == 2012:
+            print('[extract_yahoo_league_standings] - Not processing standings for 2012 as Yahoo API bugs out')
+            return
+        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+        league_standings = self.query.get_league_standings().clean_data_dict()['teams']
+        # League standings are presented as team objects, with additional standings metadata
+        team_standings = []
+        for team_results_obj in league_standings:
+            team_results = team_results_obj['team'].clean_data_dict()
+            team_standings.append({
+                'name': team_results.get('name', ''),
+                'team_id': team_results.get('team_id', ''),
+                'team_key': team_results.get('team_key', ''),
+                'clinched_playoffs': team_results.get('clinched_playoffs', 0),
+                'total_points': team_results.get('team_points', {}).get('total', 0),
+                'wins': team_results.get('team_standings', {}).get('outcome_totals', {}).get('wins', 0),
+                'losses': team_results.get('team_standings', {}).get('outcome_totals', {}).get('losses', 0),
+                'ties': team_results.get('team_standings', {}).get('outcome_totals', {}).get('ties', 0),
+                'percentage': team_results.get('team_standings', {}).get('outcome_totals', {}).get('percentage', 0),
+                'playoff_seed': team_results.get('team_standings', {}).get('playoff_seed', 0),
+                'rank': team_results.get('team_standings', {}).get('rank', 0)
+            })
+
+        # Create a DataFrame from the list of dictionaries
+        self.df_league_standings = pd.DataFrame(team_standings)
+        # Ensure the 'league_standings' directory exists
+        output_dir = f'{self.current_directory}/league_standings'
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save the DataFrame to a CSV file
+        output_file = f'{output_dir}/{self.year}_league_standings.csv'
+        self.df_league_standings.sort_values('total_points', ascending=False, inplace=True)
+        self.df_league_standings.to_csv(output_file, index=False)
