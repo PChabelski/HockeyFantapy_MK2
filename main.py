@@ -38,11 +38,10 @@ else:
 # =============================================================================================
 for year in years:
     print(f'Processing Year: {year}')
-    # Initialize the YEAR_INSTANCE class with the control file, current directory, and year
     yahoo_api_instance = YEAR_INSTANCE(control_file, current_directory, year)
     yahoo_api_instance.extract_yahoo_league_metadata()
     yahoo_api_instance.extract_yahoo_league_teams()
-
+    yahoo_api_instance.extract_yahoo_league_standings()
 
 
 '''
