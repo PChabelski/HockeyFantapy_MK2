@@ -32,42 +32,107 @@ class YEAR_INSTANCE:
             save_json_to_var_only=True
         )
 
-        print('Successfully initialized YahooFantasySportsQuery')
-        print('Available functionality:')
-        print(dir(self.query))
-
     def extract_yahoo_league_metadata(self):
-        #get_league_draft_results
-        # get_league_transactions
-        #get_league_matchups_by_week
-        # self.team_standings = self.query.get_team_standings(team_id) # this is for a particular team
+        """
+        Extracts and saves Yahoo Fantasy Sports league metadata as a CSV file.
+        Optimized for performance by directly appending data to the DataFrame.
+        """
+        # Retrieve and clean league metadata
+        league_metadata = self.query.get_league_metadata().clean_data_dict()
 
-        self.league_info = self.query.get_league_info()
-        self.league_metadata = self.query.get_league_metadata().clean_data_dict()
+        # Create a DataFrame directly from the metadata dictionary
+        self.df_league_metadata = pd.DataFrame([league_metadata])
+
+        # Ensure the 'league_metadata' directory exists
+        output_dir = f'{self.current_directory}/league_metadata'
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save the DataFrame to a CSV file
+        output_file = f'{output_dir}/{self.year}_league_metadata.csv'
+        self.df_league_metadata.to_csv(output_file, index=False)
+
+    def extract_yahoo_league_teams(self):
+        """
+        Extracts and saves Yahoo Fantasy Sports league teams data as a CSV file.
+
+        This method retrieves a list of team dictionaries using the YahooFantasySportsQuery object,
+        processes each team's data, and stores it in a pandas DataFrame. The data is then saved
+        to a CSV file in a directory named 'league_teams'. If the directory does not exist, it is created.
+
+        Attributes:
+            self.league_teams (list): A list of team dictionaries retrieved from the Yahoo API.
+            self.df_league_teams (pd.DataFrame): A DataFrame to store the processed team data.
+
+        CSV Columns:
+            - name: Team name (decoded from UTF-8).
+            - team_id: Unique identifier for the team.
+            - team_key: Key associated with the team.
+            - number_of_moves: Number of moves made by the team.
+            - number_of_trades: Number of trades made by the team.
+            - waiver_priority: Waiver priority of the team.
+            - faab_balance: Free Agent Acquisition Budget balance.
+            - clinched_playoffs: Indicates if the team clinched playoffs (default is 0 if not available).
+            - team_logo_url: URL of the team's logo.
+            - email: Email of the team manager.
+            - felo_score: Felo score of the team manager.
+            - felo_tier: Felo tier of the team manager.
+            - gm_image_url: URL of the general manager's image.
+            - gm_name: Nickname of the general manager.
+        """
+        # Retrieve and clean league teams data
+
+        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        # 2012 the API CANNOT PARSE THE TEAMS; MANUALLY GENERATE INSTEAD!
+        if self.year == 2012:
+            print('[extract_yahoo_league_teams] - Not processing teams for 2012 as Yahoo API bugs out')
+            return
+        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+        league_teams = self.query.get_league_teams()
+
+        # Prepare a list of team dictionaries for DataFrame creation
+        team_data = []
+        for team_obj in league_teams:
+            team = team_obj.clean_data_dict()
+
+            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            # YAHOO API ERROR-HANDLING - CONSIDER MOVING THESE INTO YEAR-METHODS
+            # Safely handle the 'managers' field if it's a list
+            # This occurs in 2014 when Yusko co-managed with someone else.
+            managers = team.get('managers', {})
+            if isinstance(managers, list) and managers:
+                manager = managers[0]  # Access the first manager in the list
+                print('[extract_yahoo_league_teams] - Co-manager found, using first manager')
+            else:
+                manager = managers  # Assume it's a dictionary or empty
+            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+            team_data.append({
+                'name': team.get('name', ''),
+                'team_id': team.get('team_id', ''),
+                'team_key': team.get('team_key', ''),
+                'number_of_moves': team.get('number_of_moves', 0),
+                'number_of_trades': team.get('number_of_trades', 0),
+                'waiver_priority': team.get('waiver_priority', 0),
+                'faab_balance': team.get('faab_balance', 0),
+                'clinched_playoffs': team.get('clinched_playoffs', 0),
+                'team_logo_url': team.get('team_logos', {}).get('team_logo', {}).url,
+                'email': manager.get('email', '') if isinstance(manager, dict) else '',
+                'felo_score': manager.get('felo_score', 0) if isinstance(manager, dict) else 0,
+                'felo_tier': manager.get('felo_tier', '') if isinstance(manager, dict) else '',
+                'gm_image_url': manager.get('image_url', '') if isinstance(manager, dict) else '',
+                'gm_name': manager.get('nickname', '') if isinstance(manager, dict) else ''
+            })
+        # Create a DataFrame from the list of dictionaries
+        self.df_league_teams = pd.DataFrame(team_data)
+        # Ensure the 'league_teams' directory exists
+        output_dir = f'{self.current_directory}/league_teams'
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save the DataFrame to a CSV file
+        output_file = f'{output_dir}/{self.year}_league_teams.csv'
+        self.df_league_teams.to_csv(output_file, index=False)
+
+
+    def extract_yahoo_league_standings(self):
         self.league_standings = self.query.get_league_standings().clean_data_dict()
-        self.league_teams = self.query.get_league_teams()
-
-
-        # print('League Metadata:')
-        # print(self.league_metadata)
-        # df_league_metadata = pd.DataFrame(columns = self.league_metadata.keys())
-        # league_metadata_tuple = ()
-        # for column in self.league_metadata.keys():
-        #     league_metadata_tuple = league_metadata_tuple + (self.league_metadata[column],)
-        # df_league_metadata.loc[len(df_league_metadata)]= league_metadata_tuple
-        # if not os.path.exists(f'{self.current_directory}/league_metadata'):
-        #     os.mkdir(f'{self.current_directory}/league_metadata')
-        # df_league_metadata.to_csv(f'{self.current_directory}/league_metadata/{self.year}_league_metadata.csv', index=False)
-
-
-        print('League Standings:')
-        print(len(self.league_standings['teams']))
-        for i in range(0,len(self.league_standings['teams'])):
-            print(self.league_standings['teams'][i]['team'].clean_data_dict())
-
-
-
-        # print('League Teams:')
-        # print(self.league_teams)
-
-        print('Dynamically generate a dataframe, where applicable')
