@@ -39,11 +39,12 @@ else:
 for year in years:
     print(f'Processing Year: {year}')
     yahoo_api_instance = YEAR_INSTANCE(control_file, current_directory, year)
-    yahoo_api_instance.extract_yahoo_league_metadata()
-    yahoo_api_instance.extract_yahoo_league_teams()
-    yahoo_api_instance.extract_yahoo_league_standings()
-
-
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    # yahoo_api_instance.extract_yahoo_league_metadata()
+    # yahoo_api_instance.extract_yahoo_league_teams()
+    # yahoo_api_instance.extract_yahoo_league_standings()
+    yahoo_api_instance.NHL_schedule_parser()
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 '''
 Available methods from yahoo api:
 ['YFO', '__class__', '__delattr__', '__dict__', '__dir__', '__doc__', '__eq__', 
