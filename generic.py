@@ -1,6 +1,10 @@
 from yfpy.query import YahooFantasySportsQuery
+from bs4 import BeautifulSoup, Comment
+import requests
+from datetime import datetime
 from pathlib import Path
 import pandas as pd
+import numpy as np
 import os
 
 class YEAR_INSTANCE:
@@ -133,7 +137,6 @@ class YEAR_INSTANCE:
         output_file = f'{output_dir}/{self.year}_league_teams.csv'
         self.df_league_teams.to_csv(output_file, index=False)
 
-
     def extract_yahoo_league_standings(self):
 
         # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -172,3 +175,117 @@ class YEAR_INSTANCE:
         output_file = f'{output_dir}/{self.year}_league_standings.csv'
         self.df_league_standings.sort_values('total_points', ascending=False, inplace=True)
         self.df_league_standings.to_csv(output_file, index=False)
+
+    def NHL_schedule_parser(self):
+        # # Pulls data from Hockey Reference Page for the selected years. The webpage url uses the year+1 value.
+        # page = requests.get(f"https://www.hockey-reference.com/leagues/NHL_{str(self.year + 1)}_games.html")
+        # soup = BeautifulSoup(page.content, 'html.parser')
+        # all_games = soup.find(id="all_games")
+        # items = all_games.find_all(class_="left")
+        #
+        # date = ''
+        # team_A = ''
+        # team_B = ''
+        # week = ''
+        # counter = 0
+        # self.df_sched = pd.DataFrame(columns=['date', 'away', 'home'])
+        #
+        # # Cycle through the items in the soup object:
+        # for i in range(0, len(items)):
+        #     # skip 6 -> time
+        #     # skip 9 -> notes
+        #
+        #     if i < 5:
+        #         # skip 0 to 4 -> junk metadata
+        #         continue
+        #     if i % 5 == 0:
+        #         # 5 -> date
+        #         try:
+        #             date = items[i]
+        #             date = date.find("a").getText()
+        #         except:
+        #             # some edge cases
+        #             #  <th class="left" csk="202211080LAK" data-stat="date_game" scope="row">2022-11-08</th>,
+        #             date = items[i]
+        #             date = date.getText()
+        #
+        #         date = datetime.strptime(date, "%Y-%m-%d")
+        #
+        #     if (i - 2) % 5 == 0:
+        #         # 7 -> team A
+        #         team_A = items[i]
+        #         team_A = team_A.find("a").getText()
+        #
+        #     if (i - 3) % 5 == 0:
+        #         # 8 -> team B
+        #         team_B = items[i]
+        #         team_B = team_B.find("a").getText()
+        #         # print('team_B: ', team_B)
+        #     if (i - 4) % 5 == 0:
+        #         self.df_sched.loc[counter, 'date'] = date.strftime("%Y-%m-%d")
+        #         self.df_sched.loc[counter, 'away'] = team_A
+        #         self.df_sched.loc[counter, 'home'] = team_B
+        #         self.df_sched.loc[counter, 'week'] = week
+        #         date = ''
+        #         team_A = ''
+        #         team_B = ''
+        #         week = ''
+        #         counter += 1
+        #         continue
+        # # now go through each row and tag the team game count
+        # self.df_sched['home_count'] = np.nan
+        # self.df_sched['away_count'] = np.nan
+        # for team in self.df_sched['home'].unique():
+        #     game_counter = 1
+        #     for j in range(0, len(self.df_sched)):
+        #         if team in self.df_sched['home'].iloc[j]:
+        #             self.df_sched.loc[j, 'home_count'] = game_counter
+        #             game_counter += 1
+        #         elif team in self.df_sched['away'].iloc[j]:
+        #             self.df_sched.loc[j, 'away_count'] = game_counter
+        #             game_counter += 1
+        #         else:
+        #             pass
+        #
+        # output_dir = f'{self.current_directory}/season_schedules'
+        # os.makedirs(output_dir, exist_ok=True)
+        # self.df_sched.to_csv(f'{output_dir}/{self.year}_NHL_Schedule.csv', index=False)
+
+
+        # Fetch and parse the webpage
+        page = requests.get(f"https://www.hockey-reference.com/leagues/NHL_{self.year + 1}_games.html")
+        soup = BeautifulSoup(page.content, 'html.parser')
+        items = soup.find(id="all_games").find_all(class_="left")
+
+        # Initialize DataFrame and variables
+        self.df_sched = pd.DataFrame(columns=['date', 'away', 'home'])
+        counter = 0
+
+        # Process items to extract game data
+        for i, item in enumerate(items[5:], start=5):  # Skip first 5 items
+            if i % 5 == 0:  # Date
+                date = item.find("a").getText() if item.find("a") else item.getText()
+                date = datetime.strptime(date, "%Y-%m-%d")
+            elif (i - 2) % 5 == 0:  # Away team
+                team_A = item.find("a").getText()
+            elif (i - 3) % 5 == 0:  # Home team
+                team_B = item.find("a").getText()
+            elif (i - 4) % 5 == 0:  # Save game data
+                self.df_sched.loc[counter] = [date.strftime("%Y-%m-%d"), team_A, team_B]
+                counter += 1
+
+        # Add game counts for each team
+        for team in self.df_sched['home'].unique():
+            game_counter = 1
+            for j, row in self.df_sched.iterrows():
+                if team in row['home']:
+                    self.df_sched.at[j, 'home_count'] = game_counter
+                    game_counter += 1
+                elif team in row['away']:
+                    self.df_sched.at[j, 'away_count'] = game_counter
+                    game_counter += 1
+
+        # Save the schedule to a CSV file
+        output_dir = f'{self.current_directory}/season_schedules'
+        os.makedirs(output_dir, exist_ok=True)
+        self.df_sched.to_csv(f'{output_dir}/{self.year}_NHL_Schedule.csv', index=False)
