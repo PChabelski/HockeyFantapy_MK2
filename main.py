@@ -43,7 +43,8 @@ for year in years:
     # yahoo_api_instance.extract_yahoo_league_metadata()
     # yahoo_api_instance.extract_yahoo_league_teams()
     # yahoo_api_instance.extract_yahoo_league_standings()
-    yahoo_api_instance.NHL_schedule_parser()
+    #yahoo_api_instance.NHL_schedule_parser()
+    yahoo_api_instance.extract_player_metadata()
     # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 '''
 Available methods from yahoo api:
