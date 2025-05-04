@@ -6,6 +6,8 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import os
+import time
+
 
 class YEAR_INSTANCE:
     """
@@ -215,3 +217,31 @@ class YEAR_INSTANCE:
         output_dir = f'{self.current_directory}/season_schedules'
         os.makedirs(output_dir, exist_ok=True)
         self.df_sched.to_csv(f'{output_dir}/{self.year}_NHL_Schedule.csv', index=False)
+
+    def extract_player_metadata(self):
+
+        self.league_players = self.query.get_league_players()
+        player_arr = []
+        for player in self.league_players:
+            try:
+                player_data = player.clean_data_dict()
+            except:
+                player_data = player
+            player_arr.append({
+                'player_name': player_data.get('name', {}).get('full', 'Unknown Player'),
+                'display_position': player_data.get('display_position', '?'),
+                'editorial_player_key': player_data.get('editorial_player_key', '?'),
+                'eligible_positions': player_data.get('eligible_positions', '?'),
+                'headshot_url': player_data.get('headshot', {}).get('url', '?')
+            })
+
+        # Create a DataFrame from the list of dictionaries
+        self.df_player_metadata = pd.DataFrame(player_arr)
+        output_dir = f'{self.current_directory}/player_metadata'
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save the DataFrame to a CSV file
+        output_file = f'{output_dir}/{self.year}_player_metadata.csv'
+        self.df_player_metadata.to_csv(output_file, index=False)
+        time.sleep(60)  # Sleep for 60 seconds to avoid API rate limits
+
