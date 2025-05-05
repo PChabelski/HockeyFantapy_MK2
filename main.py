@@ -43,13 +43,13 @@ for year in years:
     print(f'Processing Year: {year}')
     yahoo_api_instance = YEAR_INSTANCE(control_file, current_directory, year)
     # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-    # yahoo_api_instance.extract_yahoo_league_metadata()
-    # yahoo_api_instance.extract_yahoo_league_teams()
-    # yahoo_api_instance.extract_yahoo_league_standings()
-    #yahoo_api_instance.NHL_schedule_parser()
-    #yahoo_api_instance.extract_player_metadata()
-    #yahoo_api_instance.extract_league_weeks_and_dates()
-    # yahoo_api_instance.extract_league_stat_categories()
+    yahoo_api_instance.extract_yahoo_league_metadata()
+    yahoo_api_instance.extract_yahoo_league_teams()
+    yahoo_api_instance.extract_yahoo_league_standings()
+    yahoo_api_instance.NHL_schedule_parser()
+    yahoo_api_instance.extract_player_metadata()
+    yahoo_api_instance.extract_league_weeks_and_dates()
+    yahoo_api_instance.extract_league_stat_categories()
     yahoo_api_instance.extract_league_scoreboard_by_week()
     # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
