@@ -319,27 +319,30 @@ class YEAR_INSTANCE:
                 team_b_total_points = int(team_b_data.get('team_points', {}).get('total', 0))
                 team_b_key = team_b_data.get('team_key', 'Unknown')
                 team_b_name = team_b_data.get('name', 'Unknown').decode('utf-8')
+                team_a_result = 'WIN' if team_a_total_points > team_b_total_points else 'LOSS' if team_a_total_points < team_b_total_points else 'TIE'
+                team_b_result = 'WIN' if team_b_total_points > team_a_total_points else 'LOSS' if team_b_total_points < team_a_total_points else 'TIE'
+
                 matchup_arr.append({
                     'season': self.year,
                     'week': week,
-                    'week_start': week_start,
-                    'week_end': week_end,
                     'is_consolation': is_consolation,
                     'is_playoff': is_playoff,
                     'winner_team_key': winner_team_key,
                     'team_a_key': team_a_key,
                     'team_a_name': team_a_name,
                     'team_a_total_points': team_a_total_points,
+                    'team_a_result': team_a_result,
                     'team_b_key': team_b_key,
                     'team_b_name': team_b_name,
-                    'team_b_total_points': team_b_total_points
+                    'team_b_total_points': team_b_total_points,
+                    'team_b_result': team_b_result
                 })
 
         # Create a DataFrame from the list of dictionaries
         self.df_matchup_metadata = pd.DataFrame(matchup_arr)
-        output_dir = f'{self.current_directory}/league_matchup_metadata'
+        output_dir = f'{self.current_directory}/league_scoreboards_by_week'
         os.makedirs(output_dir, exist_ok=True)
 
         # Save the DataFrame to a CSV file
-        output_file = f'{output_dir}/{self.year}_league_matchup_metadata.csv'
+        output_file = f'{output_dir}/{self.year}_league_scoreboards.csv'
         self.df_matchup_metadata.to_csv(output_file, index=False)
