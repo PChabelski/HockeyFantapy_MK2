@@ -1,7 +1,7 @@
 from yfpy.query import YahooFantasySportsQuery
 from bs4 import BeautifulSoup, Comment
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -245,3 +245,104 @@ class YEAR_INSTANCE:
         self.df_player_metadata.to_csv(output_file, index=False)
         time.sleep(60)  # Sleep for 60 seconds to avoid API rate limits
 
+    def extract_league_weeks_and_dates(self):
+        self.game_weeks = self.query.get_game_weeks_by_game_id(self.game_id)
+        week_arr = []
+        for week_data in self.game_weeks:
+            week_data = week_data.clean_data_dict()
+            week = week_data.get('week', '?')
+            week_start = week_data.get('start', '?')
+            week_end = week_data.get('end', '?')
+            date_range = pd.date_range(start=week_start, end=week_end)
+            for date in date_range:
+                week_arr.append({
+                    'season': self.year,
+                    'week': week,
+                    'date': date,
+                })
+        # Create a DataFrame from the list of dictionaries
+        self.df_weeks = pd.DataFrame(week_arr)
+        output_dir = f'{self.current_directory}/league_weeks_and_dates'
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save the DataFrame to a CSV file
+        output_file = f'{output_dir}/{self.year}_league_weeks_and_dates.csv'
+        self.df_weeks.to_csv(output_file, index=False)
+
+
+    def extract_league_stat_categories(self):
+        self.stat_categories = self.query.get_game_stat_categories_by_game_id(self.game_id).clean_data_dict()['stats']
+        stat_arr = []
+        for stat_data in self.stat_categories:
+            stat = stat_data['stat'].clean_data_dict()
+            print(stat)
+            stat_arr.append({
+                'season': self.year,
+                'display_name': stat.get('display_name', '?'),
+                'name': stat.get('name', '?'),
+                'stat_id': stat.get('stat_id', '?'),
+            })
+        # Create a DataFrame from the list of dictionaries
+        self.df_stats = pd.DataFrame(stat_arr)
+        output_dir = f'{self.current_directory}/league_stat_categories'
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save the DataFrame to a CSV file
+        output_file = f'{output_dir}/{self.year}_league_stat_categories.csv'
+        self.df_stats.to_csv(output_file, index=False)
+
+    def extract_league_scoreboard_by_week(self):
+        # Check the # of weeks for this year
+        # If there are no weeks, return None
+        self.df_weeks = pd.read_csv(f'{self.current_directory}/league_weeks_and_dates/{self.year}_league_weeks_and_dates.csv')
+        matchup_arr = []
+        for week in self.df_weeks['week'].unique():
+            try:
+                week_matchup_data = self.query.get_league_scoreboard_by_week(chosen_week=int(week)).clean_data_dict()['matchups']
+            except:
+                print(f'No matchups in week {week} for year {self.year} (likely extra playoff week)')
+                continue
+            for matchup_count in week_matchup_data:
+                matchup_data = matchup_count['matchup'].clean_data_dict()
+                # Extract the relevant data from the matchup_data dictionary
+                is_consolation = matchup_data.get('is_consolation', 0)
+                is_playoff = matchup_data.get('is_playoff', 0)
+                week = matchup_data.get('week', 0)
+                week_start = matchup_data.get('week_start', 0)
+                week_end = matchup_data.get('week_end', 0)
+                winner_team_key = matchup_data.get('winner_team_key', 'TIED')
+                team_a_data = matchup_data['teams'][0]['team'].clean_data_dict()
+                team_b_data = matchup_data['teams'][1]['team'].clean_data_dict()
+                team_a_total_points = int(team_a_data.get('team_points', {}).get('total', 0))
+                team_a_key = team_a_data.get('team_key', 'Unknown')
+                team_a_name = team_a_data.get('name', 'Unknown').decode('utf-8')
+                team_b_total_points = int(team_b_data.get('team_points', {}).get('total', 0))
+                team_b_key = team_b_data.get('team_key', 'Unknown')
+                team_b_name = team_b_data.get('name', 'Unknown').decode('utf-8')
+                team_a_result = 'WIN' if team_a_total_points > team_b_total_points else 'LOSS' if team_a_total_points < team_b_total_points else 'TIE'
+                team_b_result = 'WIN' if team_b_total_points > team_a_total_points else 'LOSS' if team_b_total_points < team_a_total_points else 'TIE'
+
+                matchup_arr.append({
+                    'season': self.year,
+                    'week': week,
+                    'is_consolation': is_consolation,
+                    'is_playoff': is_playoff,
+                    'winner_team_key': winner_team_key,
+                    'team_a_key': team_a_key,
+                    'team_a_name': team_a_name,
+                    'team_a_total_points': team_a_total_points,
+                    'team_a_result': team_a_result,
+                    'team_b_key': team_b_key,
+                    'team_b_name': team_b_name,
+                    'team_b_total_points': team_b_total_points,
+                    'team_b_result': team_b_result
+                })
+
+        # Create a DataFrame from the list of dictionaries
+        self.df_matchup_metadata = pd.DataFrame(matchup_arr)
+        output_dir = f'{self.current_directory}/league_scoreboards_by_week'
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save the DataFrame to a CSV file
+        output_file = f'{output_dir}/{self.year}_league_scoreboards.csv'
+        self.df_matchup_metadata.to_csv(output_file, index=False)
