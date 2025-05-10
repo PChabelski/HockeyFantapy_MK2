@@ -107,14 +107,41 @@ class YEAR_INSTANCE:
             # This occurs in 2014 when Yusko co-managed with someone else.
             managers = team.get('managers', {})
             if isinstance(managers, list) and managers:
-                manager = managers[0]  # Access the first manager in the list
+                manager = managers[0]['manager'].clean_data_dict()  # Access the first manager in the list
                 print('[extract_yahoo_league_teams] - Co-manager found, using first manager')
             else:
-                manager = managers  # Assume it's a dictionary or empty
+                manager = managers['manager'].clean_data_dict()  # Assume it's a dictionary or empty
+            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            # Data quality update - force the names of each GM to be the same across seasons
+            # Some GMs have different names in different seasons, etc.
+            gm_name =  manager.get('nickname', '')
+            team_name = team.get('name', '').decode('utf-8')
+            if team_name == "Vintage'tingle'Boar":
+                gm_name = 'Tingle'
+            elif team_name == "The Nerve":
+                gm_name = 'Ira'
+            elif (team_name == "#G") | (team_name == "Grampa Jarzabek"):
+                gm_name = 'A'
+            else:
+                pass
+            if gm_name == 'Doctor Kocktapus':
+                gm_name = 'Peter'
+            elif gm_name == 't':
+                gm_name = 'Taylor'
+            elif gm_name == 'Master':
+                gm_name = 'Yusko'
+            elif gm_name == 'Thomson McKnight':
+                gm_name = 'Thomson'
+            elif gm_name == 'garrett':
+                gm_name = 'Garrett'
+            elif gm_name == 'george':
+                gm_name = 'George'
+            else:
+                pass
             # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
             team_data.append({
-                'name': team.get('name', ''),
+                'name': team_name,
                 'team_id': team.get('team_id', ''),
                 'team_key': team.get('team_key', ''),
                 'number_of_moves': team.get('number_of_moves', 0),
@@ -127,7 +154,7 @@ class YEAR_INSTANCE:
                 'felo_score': manager.get('felo_score', 0) if isinstance(manager, dict) else 0,
                 'felo_tier': manager.get('felo_tier', '') if isinstance(manager, dict) else '',
                 'gm_image_url': manager.get('image_url', '') if isinstance(manager, dict) else '',
-                'gm_name': manager.get('nickname', '') if isinstance(manager, dict) else ''
+                'gm_name': gm_name
             })
         # Create a DataFrame from the list of dictionaries
         self.df_league_teams = pd.DataFrame(team_data)
@@ -219,31 +246,80 @@ class YEAR_INSTANCE:
         self.df_sched.to_csv(f'{output_dir}/{self.year}_NHL_Schedule.csv', index=False)
 
     def extract_player_metadata(self):
+        # Updating this to append to one master file
+        # instead of creating a new file each time, since sometimes yahoo can't parse particular players per year
+        # you still extract the players by year, but you can append to the master file instead of creating the new file
+        try:
+            self.df_players_metadata = pd.read_csv(f'{self.current_directory}/player_metadata/player_metadata_master_list.csv')
+        except:
 
+            self.df_players_metadata = pd.DataFrame(columns=['player_name', 'display_position', 'player_key', 'eligible_positions', 'headshot_url', 'stripped_name'])
+        players = []
         self.league_players = self.query.get_league_players()
-        player_arr = []
         for player in self.league_players:
             try:
                 player_data = player.clean_data_dict()
             except:
                 player_data = player
-            player_arr.append({
-                'player_name': player_data.get('name', {}).get('full', 'Unknown Player'),
-                'display_position': player_data.get('display_position', '?'),
-                'editorial_player_key': player_data.get('editorial_player_key', '?'),
-                'eligible_positions': player_data.get('eligible_positions', '?'),
-                'headshot_url': player_data.get('headshot', {}).get('url', '?')
-            })
+            player_key = player_data.get('player_key', '?').split('.')[-1] # grab only the ID part, not the game / year code
+            if player_key !='?' and int(player_key) not in self.df_players_metadata['player_key'].unique():
+                player_name = player_data.get('name', {}).get('full', 'Unknown Player')
+                player_name = self.player_name_cleaner(player_name, player_key)
+                # strip whitespace and convert to lowercase for easier fuzzy-matching
+                # Ie: Phil Kessel -> philkessel
+                stripped_name = player_name.strip().replace(" ", "").lower()
+                players.append({
+                    'player_name': player_name,
+                    'display_position': player_data.get('display_position', '?'),
+                    'player_key':player_key,
+                    'eligible_positions': player_data.get('eligible_positions', '?'),
+                    'headshot_url': player_data.get('headshot', {}).get('url', '?'),
+                    'stripped_name': stripped_name
+                })
+                print(f'Adding new player: {player_name} | {player_key} | {stripped_name} to the master list')
 
-        # Create a DataFrame from the list of dictionaries
-        self.df_player_metadata = pd.DataFrame(player_arr)
+        new_players_df = pd.DataFrame(players)
+        # Append new players to the existing DataFrame
+        self.df_players_metadata = pd.concat([self.df_players_metadata, new_players_df], ignore_index=True)
+        # Save the DataFrame to a CSV file
         output_dir = f'{self.current_directory}/player_metadata'
         os.makedirs(output_dir, exist_ok=True)
-
-        # Save the DataFrame to a CSV file
-        output_file = f'{output_dir}/{self.year}_player_metadata.csv'
-        self.df_player_metadata.to_csv(output_file, index=False)
+        output_file = f'{output_dir}/player_metadata_master_list.csv'
+        self.df_players_metadata.to_csv(output_file, index=False)
         time.sleep(60)  # Sleep for 60 seconds to avoid API rate limits
+
+    def player_name_cleaner(self, name, player_key):
+        # This function is used to clean player names such that they align with other databases we extract data from
+        # For example, the name "Sebastian Aho" is stored as "Sebastian Antero Aho" in the NHL database
+        cleaned_name = name
+        if 'Mike' in name:
+            cleaned_name  = name.replace('Mike', 'Michael')
+        if 'John-Jason' in name:
+            cleaned_name  = name.replace('John-Jason', 'JJ')
+        if 'Tommy' in name:
+            cleaned_name  = name.replace('Tommy', 'Thomas')
+        if 'Nicholas' in name:
+            cleaned_name  = name.replace('Nicholas', 'Nick')
+        if 'Alexander' in name:
+            cleaned_name  = name.replace('Alexander', 'Alex')
+
+        # Now do actual name replacements
+        if name == 'Bo Groulx':
+            cleaned_name = 'Benoit-Olivier Groulx'
+        if name == 'Sebastian Aho' and '6777' in player_key:
+            cleaned_name = 'Sebastian Antero Aho' # This is the Carolina Hurricanes center
+        if name == 'Sebastian Aho' and  '7654' in player_key:
+            cleaned_name = 'Sebastian Johannes Aho' # This is the New York Islanders defenseman
+        if name == 'Elias Pettersson' and  '32762' in player_key:
+            cleaned_name = 'Elias Nils Pettersson' # This is the Canucks defenseman
+        if name == 'Elias Pettersson' and '7520' in player_key:
+            cleaned_name = 'Elias Fredrik Pettersson' # This is the Canucks forward
+
+        # Diagnostic statement
+        if name != cleaned_name:
+            print(f'Player name cleaned from {name} to {cleaned_name}')
+
+        return cleaned_name
 
     def extract_league_weeks_and_dates(self):
         self.game_weeks = self.query.get_game_weeks_by_game_id(self.game_id)
@@ -308,8 +384,6 @@ class YEAR_INSTANCE:
                 is_consolation = matchup_data.get('is_consolation', 0)
                 is_playoff = matchup_data.get('is_playoff', 0)
                 week = matchup_data.get('week', 0)
-                week_start = matchup_data.get('week_start', 0)
-                week_end = matchup_data.get('week_end', 0)
                 winner_team_key = matchup_data.get('winner_team_key', 'TIED')
                 team_a_data = matchup_data['teams'][0]['team'].clean_data_dict()
                 team_b_data = matchup_data['teams'][1]['team'].clean_data_dict()
@@ -346,3 +420,75 @@ class YEAR_INSTANCE:
         # Save the DataFrame to a CSV file
         output_file = f'{output_dir}/{self.year}_league_scoreboards.csv'
         self.df_matchup_metadata.to_csv(output_file, index=False)
+
+    def extract_yahoo_draft_results(self):
+        df_draft = pd.DataFrame(columns=['season',
+                                             'week',
+                                             'transaction_date',
+                                             'transaction_type',
+                                             'transaction_id',
+                                             'status',
+                                             'player_id',
+                                             'name',
+                                             'draft_round',
+                                             'faab_bid',
+                                             'source',
+                                             'source_key',
+                                             'destination',
+                                             'destination_key',
+                                             'waiver',
+                                             'keeper'])
+
+        draft_arr = []
+        df_players = pd.read_csv(f'{self.current_directory}/player_metadata/player_metadata_master_list.csv')
+        df_teams = pd.read_csv(f'{self.current_directory}/league_teams/{str(self.year)}_league_teams.csv')
+        draft = self.query.get_league_draft_results()
+        print(len(draft))
+        for drft in range(0, len(draft)):
+            draft_pick = draft[drft].clean_data_dict()
+            draft_time = self.control_file['keepers'][str(self.year)]['draft_date']
+            draft_type = 'draft'
+            pick_number = draft_pick.get('pick', '')
+            pick_round = draft_pick.get('round', '')
+            player_id = draft_pick.get('player_key', '').split('.')[-1] # grab only the ID part, not the game / year code
+            team_key = draft_pick.get('team_key', '')
+            draft_id = str(self.year) + "_0_Draft_" + str(pick_number)
+            player_name = df_players[df_players['player_key'] == int(player_id)]['player_name'].values[0]
+            gm_name = df_teams[df_teams['team_key'] == team_key]['gm_name'].values[0]
+            team_name = df_teams[df_teams['team_key'] == team_key]['name'].values[0]
+            source_key = '99.l.99.t.99'
+            source = 'Free Agency'
+            try: # TO-DO: Change it from player name to the player key
+                keeper_check = 'KEEPER' if player_name in self.control_file['keepers'][str(self.year)][team_key] else 'NO'
+            except:
+                # for years 2017 and back
+                keeper_check = 'NO'
+
+            draft_arr.append({
+                'season': self.year,
+                'week': 0,
+                'transaction_date': draft_time,
+                'transaction_type': draft_type,
+                'transaction_id': draft_id,
+                'status': 'successful',
+                'player_id': player_id,
+                'name': player_name,
+                'draft_round': pick_round,
+                'faab_bid': '',
+                'source': source,
+                'source_key': source_key,
+                'destination': team_name,
+                'destination_key': team_key,
+                'waiver': '',
+                'keeper': keeper_check
+            })
+            #print(draft_pick, draft_time, draft_type, pick_number, pick_round, player_id, team_key, player_name, gm_name, team_name, source_key, source, source, keeper_check)
+
+        # Create a DataFrame from the list of dictionaries
+        self.df_draft = pd.DataFrame(draft_arr)
+        output_dir = f'{self.current_directory}/league_drafts'
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save the DataFrame to a CSV file
+        output_file = f'{output_dir}/{self.year}_league_draft.csv'
+        self.df_draft.to_csv(output_file, index=False)
