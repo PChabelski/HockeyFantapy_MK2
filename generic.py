@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 import os
 import time
-
+import re
 
 class YEAR_INSTANCE:
     """
@@ -181,7 +181,7 @@ class YEAR_INSTANCE:
         for team_results_obj in league_standings:
             team_results = team_results_obj['team'].clean_data_dict()
             team_standings.append({
-                'name': team_results.get('name', ''),
+                'name': team_results.get('name', '').decode("utf-8"),
                 'team_id': team_results.get('team_id', ''),
                 'team_key': team_results.get('team_key', ''),
                 'clinched_playoffs': team_results.get('clinched_playoffs', 0),
@@ -252,7 +252,6 @@ class YEAR_INSTANCE:
         try:
             self.df_players_metadata = pd.read_csv(f'{self.current_directory}/player_metadata/player_metadata_master_list.csv')
         except:
-
             self.df_players_metadata = pd.DataFrame(columns=['player_name', 'display_position', 'player_key', 'eligible_positions', 'headshot_url', 'stripped_name'])
         players = []
         self.league_players = self.query.get_league_players()
@@ -267,11 +266,11 @@ class YEAR_INSTANCE:
                 player_name = self.player_name_cleaner(player_name, player_key)
                 # strip whitespace and convert to lowercase for easier fuzzy-matching
                 # Ie: Phil Kessel -> philkessel
-                stripped_name = player_name.strip().replace(" ", "").lower()
+                stripped_name = re.sub(r'\W+', '', player_name.strip().replace(" ", "").lower())
                 players.append({
                     'player_name': player_name,
                     'display_position': player_data.get('display_position', '?'),
-                    'player_key':player_key,
+                    'player_key':int(player_key),
                     'eligible_positions': player_data.get('eligible_positions', '?'),
                     'headshot_url': player_data.get('headshot', {}).get('url', '?'),
                     'stripped_name': stripped_name
@@ -285,6 +284,7 @@ class YEAR_INSTANCE:
         output_dir = f'{self.current_directory}/player_metadata'
         os.makedirs(output_dir, exist_ok=True)
         output_file = f'{output_dir}/player_metadata_master_list.csv'
+        self.df_players_metadata.sort_values('player_key', ascending=True, inplace=True)
         self.df_players_metadata.to_csv(output_file, index=False)
         time.sleep(60)  # Sleep for 60 seconds to avoid API rate limits
 
