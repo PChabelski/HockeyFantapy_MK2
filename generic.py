@@ -1024,3 +1024,49 @@ class YEAR_INSTANCE:
                           index=False)
 
 
+    def post_processor_matchup_matchups(self):
+        # I want to use this to create a matchup dataframe containing each week's data
+        # and also do a sanity check on the results relative to Yahoo's reported results
+
+        print(f'[{time.ctime()}] Post-processing matchup metadata for year {self.year}')
+        try:
+            df_scoreboard = pd.read_csv(f'{self.current_directory}/league_scoreboards_by_week/{self.year}_league_scoreboards.csv')
+        except FileNotFoundError:
+            print(f'>>>> [Rundate: {time.ctime()}] No matchup data found for {self.year}. Skipping post-processing - make sure the data is available.')
+            return
+        try:
+            df_weeks = pd.read_csv(f'{self.current_directory}/league_weeks_and_dates/{self.year}_league_weeks_and_dates.csv')
+        except FileNotFoundError:
+            print(f'>>>> [Rundate: {time.ctime()}] No schedule found for {self.year}. Skipping post-processing - make sure the data is available.')
+            return
+
+        for week in df_weeks['week'].unique():
+            print(f'Post-processing week {week}...')
+            df_week_matchups = pd.DataFrame
+
+            for date in df_weeks[df_weeks['week'] == week]['date'].unique():
+                # grab the associated fuzzy-matched data for this date, stitch them together for the entire week
+                try:
+                    df_fuzzy = pd.read_csv(f'{self.current_directory}/fuzzy_merged_yahoo_nst/{self.year}_fuzzy_merged_yahoo_nst_{date}.csv')
+                except FileNotFoundError:
+                    print(f'No fuzzy-merged data found for date {date}. Skipping.')
+                    continue
+                df_week_matchups = pd.concat([df_week_matchups,df_fuzzy])
+            # Now we have the full week's fuzzy-merged data in df_week_matchups
+            df_week_matchups['PLAY_OR_BENCH'] = df_week_matchups.apply(lambda row: 'PLAY' if row['SELECTED_POSITION'] in ['C','LW','RW','D','G','UTIL'] else 'BENCH', axis=1)
+            # Now we can cycle through each GM and PLAY_OR_BENCH to sum up the appropriate stats
+            df_week_summary = df_week_matchups.groupby(['OWNER_TEAM_KEY','OWNER_TEAM_NAME','OWNER_TEAM_GM','PLAY_OR_BENCH']).agg({
+                "GOALS":"sum",
+                "TOTAL ASSISTS":"sum",
+                "PPP":"sum",
+                "SHP":"sum",
+                "SHOTS":"sum",
+                "SH%":"mean",
+                "PIM":"sum",
+                "HITS":"sum",
+                "SHOTS BLOCKED":"sum",
+                "SAVES":"sum",
+                "SV%":"mean"}).reset_index()
+
+            df_week_summary.to_csv(f'{self.current_directory}/matchup_summaries_by_week/{self.year}_matchup_summary_week_{week}.csv', index=False)
+

@@ -69,15 +69,12 @@ yahoo_api_instance.extract_yahoo_transactions()
 
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 print('Running the experimental methods')
-# Not working yet:
+yahoo_api_instance.post_processor_matchup_matchups()
 
 
 yahoo_api_instance
-# todo: expand the player metadata to a per year and add in the fuzzy matching logic from MK1
-# todo: create the data stitcher
-# todo: add in the transactions logic
-
-# todo: how can i sql these????
+# todo: update NST data to include plus minus, shutouts, goalie wins, goalie losses, gaa... anything we may need for stats
+# todo: SQLITE????
 
 '''
 Available methods from yahoo api:
