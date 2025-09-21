@@ -55,6 +55,7 @@ class YEAR_INSTANCE:
         self.extract_league_stat_categories()
         self.extract_league_weeks_and_dates()
         self.extract_yahoo_league_standings()
+        self.ref_list = pd.read_csv(f'{self.current_directory}/manual_data/Hockey_Team_Codes.csv')
 
 
     def extract_yahoo_league_metadata(self):
@@ -223,7 +224,7 @@ class YEAR_INSTANCE:
 
     def NHL_schedule_parser(self):
         print(f'[{time.ctime()}] grabbing nhl schedule data from year {self.year}')
-
+        df_nhl_codes = pd.read_csv(f'{self.current_directory}/manual_data/Hockey_Team_Codes.csv')
         # Fetch and parse the webpage
         page = requests.get(f"https://www.hockey-reference.com/leagues/NHL_{str(int(self.year) + 1)}_games.html")
         soup = BeautifulSoup(page.content, 'html.parser')
@@ -256,6 +257,16 @@ class YEAR_INSTANCE:
                 elif team in row['away']:
                     self.df_sched.at[j, 'away_count'] = game_counter
                     game_counter += 1
+
+        list_of_games = [
+            a['href'][11:-5] for a in soup.find_all('a', href=True)
+            if a['href'].startswith('/boxscores/') and len(a['href'][11:-5]) > 11
+        ]
+        print(f'>>>> [Rundate: {time.ctime()}] Got list of boxscore codes')
+
+        # Map the URLCODE to the schedule DataFrame based on the game date
+        self.df_sched['urlcode'] = self.df_sched.apply(
+            lambda x: str(x['date'].replace('-',''))+'0'+df_nhl_codes[df_nhl_codes['Team_Name']==x['home']]['Code'].values[0], axis=1)
 
         # Save the schedule to a CSV file
         output_dir = f'{self.current_directory}/season_schedules'
@@ -339,6 +350,44 @@ class YEAR_INSTANCE:
             print(f'Player name cleaned from {name} to {cleaned_name}')
 
         return cleaned_name
+
+
+    def identical_names_handler(self, df, dbtype):
+        """
+        Handles identical player names by appending middle names based on unique identifiers.
+        """
+        players_to_update = {
+            'yahoo': {
+                'Sebastian Aho': {6777: 'Sebastian Antero Aho', 7654: 'Sebastian Johannes Aho'},
+                'Elias Pettersson': {7520: 'Elias Fredrik Pettersson', 32762: 'Elias Nils Pettersson'}
+            },
+            'hr': {
+                'Sebastian Aho': {'D': 'Sebastian Johannes Aho', 'C': 'Sebastian Antero Aho'},
+                'Elias Pettersson': {'C': 'Elias Fredrik Pettersson', 'D': 'Elias Nils Pettersson'}
+            }
+        }
+
+        if dbtype in players_to_update:
+            for player, updates in players_to_update[dbtype].items():
+                if player in df['Player'].unique():
+                    for key, new_name in updates.items():
+                        print(f'Looking for {player} with key {key} to update to {new_name}')
+                        try:
+                            if dbtype == 'yahoo':
+                                player_keys = df[df['Player'] == player]['Player Key'].astype(int)
+                                if any(player_keys == key):
+                                    print(f'Found {player} ({key}) - adding middle name')
+                                    df.loc[(df['Player'] == player) & (
+                                                df['Player Key'].astype(int) == key), 'Player'] = new_name
+                            elif dbtype == 'nst':
+                                positions = df[df['Player'] == player]['Position']
+                                if any(positions == key):
+                                    print(f'Found {player} ({key}) - adding middle name')
+                                    df.loc[(df['Player'] == player) & (df['Position'] == key), 'Player'] = new_name
+                        except Exception as e:
+                            print(f'Error updating {player}: {e}')
+
+        return df
 
     def extract_league_weeks_and_dates(self):
 
@@ -798,20 +847,8 @@ class YEAR_INSTANCE:
                     }
                     # No need for stats, I will grab them from the fine folks at natural stat trick
                     # # Loop through and grab the stats for this player
-                    # for i in range(0, len(player_daily_metadata['player_stats']['stats'])):
-                    #     player_day_stat = player_daily_metadata['player_stats']['stats'][i]['stat'].clean_data_dict()
-                    #     # Check if the stat_id is in the df_stat_codes DataFrame
-                    #     if player_day_stat.get('stat_id', '') in df_stat_codes['stat_id'].values:
-                    #         player_metadata_dict[df_stat_codes[df_stat_codes['stat_id']==player_day_stat.get('stat_id', '')]['name'].values[0]] = player_day_stat.get('value', '')
-
                     # convert the player_metadata_and_stats_arr to a DataFrame
                     date_arr.append(player_metadata_dict)
-
-
-                    # using the player key, let's see what the other player info can give us
-                    #player_key = player_daily_metadata.get('player_key', '?')
-                    #player_date_results = self.query.get_player_stats_by_date(player_key=player_key, chosen_date=iter_date)
-                    #print(player_date_results)
 
             date_df = pd.DataFrame(date_arr)
             output_dir = f'{self.current_directory}/team_rosters_by_date'
@@ -823,8 +860,186 @@ class YEAR_INSTANCE:
             time.sleep(10)  # Sleep for 10 seconds to avoid API rate limits
 
 
+    def hr_data_parse(self):
+        print(f'[{time.ctime()}] Parsing hockey-reference data for year {self.year}')
+        for date in self.dates_to_check:
+            games_in_day_df = pd.DataFrame()
+            # this is the same code snippet I've been using for many years to pull the hockey-reference data
+            # Could use a bit of scrubbing BUT it works so leaving it for now
+            df_sched = pd.read_csv(f'{self.current_directory}/season_schedules/{self.year}_NHL_Schedule.csv')
+            url_list = df_sched[df_sched['date'] == date]['urlcode'].unique()
+            for url in url_list:
+                urlGame = f'https://www.hockey-reference.com/boxscores/{url}.html'
+                page = requests.get(urlGame)
+                if page.status_code == 429:
+                    print(f'>>>> [Rundate: {time.ctime()}] Rate limit hit at HR parser! Break out.')
+                    return
 
-    def fuzzy_outer_merge(self):
+                soup = BeautifulSoup(page.content, 'html.parser')
+                try:
+                    url_date = datetime.strptime(url[:8], '%Y%m%d').strftime('%Y-%m-%d')
+                except:
+                    print(f'>>>> [Rundate: {time.ctime()}] No game found for {urlGame}. Skipping this date.')
+                    continue
+                test = soup.find('div', id=["inner_nav"])
+                list_metadata = list(test)
+                list_metadata = list_metadata[1].text.split('\n')
+                list_metadata = [x for x in list_metadata if x != '']
+                list_metadata = [x for x in list_metadata if x != ' ']
+                home_team = list_metadata[-1].split('Schedule/Results')[0].strip()
+                home_code = url[9:]
+                away_team = list_metadata[-2].split('Schedule/Results')[0].strip()
+                away_code = self.ref_list['Code'][self.ref_list['Team_Name'] == away_team].values[0].strip()
+                # skater data has 17 colsfor 2014 onwards
+                # but only 13 for 2013 and before
+                resetCounter = 17 if int(self.year) > 2013 else 14
+                ###########################################################
+                # Team 1 are away. Team 2 are home
+                team_1_skaters = soup.find('table', id=[f"{away_code}_skaters"])
+                team_2_skaters = soup.find('table', id=[f"{home_code}_skaters"])
+                team_1_goalies = soup.find('table', id=[f"{away_code}_goalies"])
+                team_2_goalies = soup.find('table', id=[f"{home_code}_goalies"])
+                team_1_adv_stats = soup.find('table', id=[f"{away_code}_adv_ALLAll"])
+                team_2_adv_stats = soup.find('table', id=[f"{home_code}_adv_ALLAll"])
+                ##############################################################
+                skater_data = []
+                total_skater_data = []
+                headers = list(team_1_skaters)[5].get_text().split('\n')
+                headers = [x for x in headers if x != '']
+                colDropInd = 4 if int(self.year) > 2013 else 3  # differences in the years thereafter
+                headers = headers[colDropInd:]  # drop the first few dressing columns
+                for i in range(0, len(list(list(team_1_skaters)[7].find_all('td')))):
+                    if (i % resetCounter == 0) and (i != 0):
+                        total_skater_data.append(skater_data)
+                        skater_data = []
+                    value = list(list(team_1_skaters)[7].find_all('td'))[i].text
+                    skater_data.append(value)
+
+                total_skater_data.append(skater_data)  # to get the goalie, for concat purposes
+                awaySkaterDf = pd.DataFrame(data=total_skater_data, columns=headers)
+                skater_data = []
+                total_skater_data = []
+                for i in range(0, len(list(list(team_2_skaters)[7].find_all('td')))):
+                    if (i % resetCounter == 0) and (i != 0):
+                        total_skater_data.append(skater_data)
+                        skater_data = []
+                    value = list(list(team_2_skaters)[7].find_all('td'))[i].text
+                    skater_data.append(value)
+                total_skater_data.append(skater_data)  # to get the goalie, for concat purposes
+
+                awaySkaterDf['Date'] = date
+                awaySkaterDf['Team'] = away_team
+                awaySkaterDf['Team_Code'] = away_code
+                homeSkaterDf = pd.DataFrame(data=total_skater_data, columns=headers)
+                homeSkaterDf['Date'] = date
+                homeSkaterDf['Team'] = home_team
+                home_code = 'VGK' if home_code == 'VEG' else home_code
+                homeSkaterDf['Team_Code'] = home_code
+
+                total_skater_df = pd.concat([homeSkaterDf, awaySkaterDf])
+
+                ######################################
+                goalie_data = []
+                total_goalie_data = []
+
+                headers = list(team_1_goalies)[5].get_text().split('\n')
+
+                headers = [x for x in headers if x != '']
+                headers = headers[2:]
+                for i in range(0, len(list(list(team_1_goalies)[7].find_all('td')))):
+                    value = list(list(team_1_goalies)[7].find_all('td'))[i].text
+                    goalie_data.append(value)
+                    if (i % 8 == 0) and (i != 0):
+                        total_goalie_data.append(goalie_data)
+                        goalie_data = []
+                awaygoalieDf = pd.DataFrame(data=total_goalie_data, columns=headers)
+                awaygoalieDf['Date'] = date
+                awaygoalieDf['Team'] = away_team
+                away_code = 'VGK' if away_code == 'VEG' else away_code
+                awaygoalieDf['Team_Code'] = away_code
+                goalie_data = []
+                total_goalie_data = []
+                for i in range(0, len(list(list(team_2_goalies)[7].find_all('td')))):
+                    value = list(list(team_2_goalies)[7].find_all('td'))[i].text
+                    goalie_data.append(value)
+                    if (i % 8 == 0) and (i != 0):
+                        total_goalie_data.append(goalie_data)
+                        goalie_data = []
+                homeGoalieDf = pd.DataFrame(data=total_goalie_data, columns=headers)
+                homeGoalieDf['Date'] = date
+                homeGoalieDf['Team'] = home_team
+                homeGoalieDf['Team_Code'] = home_code
+                total_goalie_df = pd.concat([awaygoalieDf, homeGoalieDf])
+                total_goalie_df.drop(['PIM', 'TOI'], inplace=True,
+                                     axis=1)  # we will concat this to the total df, which already contains the data
+
+                #################################################################
+
+                adv_skater_data = []
+                adv_total_skater_data = []
+                headers = list(team_1_adv_stats)[5].get_text().split(' ')
+                headers = [x for x in headers if x != '']
+                headers = headers[1:]
+                for i in range(0, len(list(list(team_1_adv_stats)[7].find_all('td')))):
+
+                    if (i % 10 == 0) and (i != 0):
+                        adv_total_skater_data.append(adv_skater_data)
+                        adv_skater_data = []
+                    value = list(list(team_1_adv_stats)[7].find_all('td'))[i].text
+                    adv_skater_data.append(value)
+                adv_total_skater_data.append(adv_skater_data)  # for the last skater
+
+                adv_skater_data = []
+                for i in range(0, len(list(list(team_2_adv_stats)[7].find_all('td')))):
+                    if (i % 10 == 0) and (i != 0):
+                        adv_total_skater_data.append(adv_skater_data)
+                        adv_skater_data = []
+                    value = list(list(team_2_adv_stats)[7].find_all('td'))[i].text
+                    adv_skater_data.append(value)
+                adv_total_skater_data.append(adv_skater_data)  # for the last skater
+
+                total_adv_skater_df = pd.DataFrame(data=adv_total_skater_data, columns=headers)
+
+                # the adv stats table has the names in th for some reason
+                plyrList = []
+                for i in range(0, len(list(list(team_1_adv_stats)[7].find_all('th')))):
+                    plyrList.append(list(list(team_1_adv_stats)[7].find_all('th'))[i].text)
+                for i in range(0, len(list(list(team_2_adv_stats)[7].find_all('th')))):
+                    plyrList.append(list(list(team_2_adv_stats)[7].find_all('th'))[i].text)
+
+                total_adv_skater_df['Player'] = plyrList
+
+                concat_df1 = total_skater_df.merge(total_adv_skater_df, on=["Player"], how='left')
+                final_hr_df = concat_df1.merge(total_goalie_df, on=["Player", "Date", "Team"], how='left')
+                final_hr_df.drop(['Team_Code_y'], axis=1, inplace=True)
+                final_hr_df['WIN'] = final_hr_df['DEC'].copy().replace('W', 1).replace('L', '').replace('O', '')
+                final_hr_df['LOSS'] = final_hr_df['DEC'].copy().replace('L', 1).replace('W', '').replace('O', '')
+                final_hr_df.rename(columns={'Team_Code_x': 'Team_Code'}, inplace=True)
+                games_in_day_df = pd.concat([games_in_day_df, final_hr_df])
+
+
+            games_in_day_df = self.identical_names_handler(games_in_day_df, 'hr') if len(games_in_day_df) > 0 else games_in_day_df
+
+            os.mkdir(f'{self.current_directory}/hr_data/{self.year}') if not os.path.exists(
+                f'{self.current_directory}/hr_data/{self.year}') else None
+            if len(games_in_day_df) == 0:
+                print(f'>>>> [Rundate: {time.ctime()}] No games found for {date} in year {self.year} -> likely a day off')
+                continue
+            games_in_day_df.to_csv(
+                f'{self.current_directory}/hr_data/{self.year}/HR_Stats_{date}.csv', index=False)
+            # I need to do a dumb thing here - if I just save the csv, it will store two versions of each PP, EV, and SH column (one for goals, one for assists, but we don't extract that metadata)
+            # Thus, reread, fix columns, and resave
+            reread_df = pd.read_csv(f'{self.current_directory}/hr_data/{self.year}/HR_Stats_{date}.csv')
+            reread_df['PP'] = reread_df['PP'] + reread_df['PP.1']
+            reread_df['PP'] = reread_df['SH'] + reread_df['SH.1']
+            reread_df.drop(['SH.1','PP.1','EV','EV.1'], axis=1, inplace=True)
+            reread_df.to_csv(
+                f'{self.current_directory}/hr_data/{self.year}/HR_Stats_{date}.csv', index=False)
+            print(f'>>>> [Rundate: {time.ctime()}] Successfully parsed HR data for {date}.')
+
+            time.sleep(30)  # to avoid hitting the rate limit on hockey-reference.com
+
+    def fuzzy_outer_merge_nst(self):
         """
         Outer merge Yahoo and NST on fuzzy name matching.
         Keeps all rows from both dataframes, with match metadata.
@@ -1024,6 +1239,175 @@ class YEAR_INSTANCE:
                           index=False)
 
 
+
+    def fuzzy_outer_merge_hr(self):
+        """
+        Outer merge Yahoo and HR on fuzzy name matching.
+        Keeps all rows from both dataframes, with match metadata.
+        """
+
+        def normalize_name(s: str) -> str:
+            """Lowercase, strip accents, remove punctuation/extra spaces."""
+            if s is None:
+                return ""
+            s = str(s)
+            s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("utf-8")
+            return " ".join(re.sub(r"[^a-z ]", " ", s.lower()).split())
+
+        def levenshtein(s1: str, s2: str) -> int:
+            """Compute Levenshtein distance between two strings."""
+            if len(s1) < len(s2):
+                return levenshtein(s2, s1)
+            if len(s2) == 0:
+                return len(s1)
+
+            prev_row = range(len(s2) + 1)
+            for i, c1 in enumerate(s1):
+                curr_row = [i + 1]
+                for j, c2 in enumerate(s2):
+                    insertions = prev_row[j + 1] + 1
+                    deletions = curr_row[j] + 1
+                    substitutions = prev_row[j] + (c1 != c2)
+                    curr_row.append(min(insertions, deletions, substitutions))
+                prev_row = curr_row
+            return prev_row[-1]
+
+        def levenshtein_ratio(s1: str, s2: str) -> float:
+            """Convert distance to similarity ratio (0–100)."""
+            if not s1 and not s2:
+                return 100.0
+            dist = levenshtein(s1, s2)
+            return 100.0 * (1 - dist / max(len(s1), len(s2)))
+
+        ############
+        # MAIN BODY
+        ############
+        for date in self.dates_to_check:
+            ########################
+            df_yahoo = pd.read_csv(f'{self.current_directory}/team_rosters_by_date/{self.year}_rosters_{date}.csv')
+            try:
+                df_hr = pd.read_csv(f'{self.current_directory}/hr_data/{self.year}/HR_stats_{date}.csv')
+            except:
+                print(f'No HR data found for date {date} in year {self.year}. Skipping.')
+                continue
+            if len(df_hr) == 0:
+                print(f'No data to fuzzy merge for date {date} in year {self.year} -> likely a day off')
+                continue
+            threshold = 85
+            hr_col = 'Player'
+            yahoo_col = 'name'
+            #########################
+            # Normalize names
+            hr_names = df_hr[hr_col].dropna().astype(str).tolist()
+            yahoo_names = df_yahoo[yahoo_col].dropna().astype(str).tolist()
+            hr_norm = {name: normalize_name(name) for name in hr_names}
+            yahoo_norm = {name: normalize_name(name) for name in yahoo_names}
+
+            # Track matched Yahoo players
+            matched_yahoo = set()
+            merged_rows = []
+
+            # Pass 1: go through NST and try to find Yahoo matches
+            for _, n_row in df_hr.iterrows():
+                n_name = str(n_row[hr_col])
+                n_norm = normalize_name(n_name)
+
+                best_score, best_orig = -1, None
+                for orig, norm in yahoo_norm.items():
+                    score = levenshtein_ratio(n_norm, norm)
+                    if score > best_score:
+                        best_score, best_orig = score, orig
+
+                match_ok = best_score >= threshold
+                y_row = df_yahoo[df_yahoo[yahoo_col] == best_orig].iloc[0].to_dict() if match_ok else {}
+
+                if match_ok:
+                    matched_yahoo.add(best_orig)
+
+                row = {**n_row, **y_row}
+                row.update({
+                    "Yahoo_BestGuess": best_orig,
+                    "Score": round(best_score, 1) if best_score >= 0 else 0,
+                    "MATCH": match_ok
+                })
+                merged_rows.append(row)
+
+            # Pass 2: add unmatched Yahoo players
+            for _, y_row in df_yahoo.iterrows():
+                y_name = str(y_row[yahoo_col])
+                if y_name not in matched_yahoo:
+                    row = {**y_row}
+                    row.update({
+                        hr_col: None,
+                        "Yahoo_BestGuess": y_name,
+                        "Score": 0,
+                        "MATCH": False
+                    })
+                    merged_rows.append(row)
+
+            df_out =  pd.DataFrame(merged_rows)
+            df_out['Date'] = date
+            df_out['season'] = self.year
+            df_out.columns = df_out.columns.str.upper()
+
+            df_out = df_out[['SEASON',
+            'DATE',
+            'PLAYER',
+            'NAME',
+            'PLAYER_ID',
+            'PLAYER_KEY',
+            'TEAM',
+            'TEAM_CODE',
+            'SCORE',
+            'MATCH',
+            'DISPLAY_POSITION',
+            'INJURY_NOTE',
+            'IS_KEEPER',
+            'KEEPER_COST',
+            'OWNER_TEAM_KEY',
+            'OWNER_TEAM_NAME',
+            'OWNER_TEAM_GM',
+            'SELECTED_POSITION',
+            'ELIGIBLE_POSITIONS',
+            'PERCENT_OWNED',
+            'PERCENT_OWNED_DELTA',
+            'G',
+            'A',
+            'PTS' ,
+            'PP',
+            'SH',
+            '+/-'    ,
+            'PIM',
+            'GW',
+            'S',
+            'S%',
+            'HIT',
+            'BLK',
+            'SHFT',
+            'TOI',
+            'ICF',
+            'SAT‑F',
+            'SAT‑A',
+            'CF%',
+            'CREL%' ,
+            'ZSO',
+            'ZSD',
+            'OZS%',
+            'DEC',
+            'GA',
+            'SA',
+            'SV',
+            'SV%' ,
+            'SO',
+            'WIN',
+            'LOSS']]
+
+
+            df_out.to_csv(f'{self.current_directory}/fuzzy_merged_yahoo_hr/{self.year}_fuzzy_merged_yahoo_hr_{date}.csv',
+                          index=False)
+
+
+
     def post_processor_matchup_matchups(self):
         # I want to use this to create a matchup dataframe containing each week's data
         # and also do a sanity check on the results relative to Yahoo's reported results
@@ -1042,12 +1426,12 @@ class YEAR_INSTANCE:
 
         for week in df_weeks['week'].unique():
             print(f'Post-processing week {week}...')
-            df_week_matchups = pd.DataFrame
+            df_week_matchups = pd.DataFrame()
 
             for date in df_weeks[df_weeks['week'] == week]['date'].unique():
                 # grab the associated fuzzy-matched data for this date, stitch them together for the entire week
                 try:
-                    df_fuzzy = pd.read_csv(f'{self.current_directory}/fuzzy_merged_yahoo_nst/{self.year}_fuzzy_merged_yahoo_nst_{date}.csv')
+                    df_fuzzy = pd.read_csv(f'{self.current_directory}/fuzzy_merged_yahoo_hr/{self.year}_fuzzy_merged_yahoo_hr_{date}.csv')
                 except FileNotFoundError:
                     print(f'No fuzzy-merged data found for date {date}. Skipping.')
                     continue
@@ -1056,16 +1440,22 @@ class YEAR_INSTANCE:
             df_week_matchups['PLAY_OR_BENCH'] = df_week_matchups.apply(lambda row: 'PLAY' if row['SELECTED_POSITION'] in ['C','LW','RW','D','G','UTIL'] else 'BENCH', axis=1)
             # Now we can cycle through each GM and PLAY_OR_BENCH to sum up the appropriate stats
             df_week_summary = df_week_matchups.groupby(['OWNER_TEAM_KEY','OWNER_TEAM_NAME','OWNER_TEAM_GM','PLAY_OR_BENCH']).agg({
-                "GOALS":"sum",
-                "TOTAL ASSISTS":"sum",
-                "PPP":"sum",
-                "SHP":"sum",
-                "SHOTS":"sum",
-                "SH%":"mean",
+                "G":"sum",
+                "A":"sum",
+                "PP":"sum",
+                "SH":"sum",
+                "GW":"sum",
+                "S":"sum",
+                "S%":"mean",
                 "PIM":"sum",
-                "HITS":"sum",
-                "SHOTS BLOCKED":"sum",
-                "SAVES":"sum",
+                "HIT":"sum",
+                "BLK":"sum",
+                "WIN":"sum",
+                "LOSS": "sum",
+                "SV": "sum",
+                "GA": "sum",
+                "SA": "sum",
+                "TOI": "sum",
                 "SV%":"mean"}).reset_index()
 
             df_week_summary.to_csv(f'{self.current_directory}/matchup_summaries_by_week/{self.year}_matchup_summary_week_{week}.csv', index=False)

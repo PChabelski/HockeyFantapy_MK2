@@ -61,18 +61,17 @@ yahoo_api_instance = YEAR_INSTANCE(control_file, current_directory, year, proces
 
 # Functions that either extract external data or should only be run once
 # yahoo_api_instance.extract_player_metadata()
-# yahoo_api_instance.NHL_schedule_parser()
-yahoo_api_instance.extract_yahoo_draft_results()
-yahoo_api_instance.extract_yahoo_transactions()
+#yahoo_api_instance.NHL_schedule_parser()
+# yahoo_api_instance.extract_yahoo_draft_results()
+# yahoo_api_instance.extract_yahoo_transactions()
 # yahoo_api_instance.get_team_roster_player_info_by_date()
-# yahoo_api_instance.fuzzy_outer_merge()
-
+# yahoo_api_instance.fuzzy_outer_merge_nst()
+# yahoo_api_instance.hr_data_parse()
+yahoo_api_instance.fuzzy_outer_merge_hr()
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 print('Running the experimental methods')
 yahoo_api_instance.post_processor_matchup_matchups()
 
-
-yahoo_api_instance
 # todo: update NST data to include plus minus, shutouts, goalie wins, goalie losses, gaa... anything we may need for stats
 # todo: SQLITE????
 
