@@ -1,14 +1,16 @@
 import json
-import time
 import os
 import logging
 import warnings
-from datetime import datetime
-from datetime import timedelta
+from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
+import argparse
 from generic import YEAR_INSTANCE
 
+# ==============================
+# CONFIGURATION & INITIALIZATION
+# ==============================
 pd.options.display.float_format = '{:,}'.format
 np.seterr(divide='ignore')
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -18,83 +20,141 @@ logging.getLogger("yfpy.query").setLevel(level=logging.INFO)
 
 current_directory = os.getcwd()
 
+# ------------------------------
+# Command-line arguments
+# ------------------------------
+parser = argparse.ArgumentParser(description="Fantasy Hockey Automation Script")
+parser.add_argument("--mode", type=str, default=None, help="1 for Year-based, 2 for latest-live, 3 for custom")
+parser.add_argument("--year", type=str, default=None, help="Year to process (YYYY, used if mode=1)")
+parser.add_argument("--dates", type=str, default=None, help="Comma-separated dates, or ALL/ONWARDYYYY-MM-DD")
+args = parser.parse_args()
+
+# ------------------------------
+# General startup
+# ------------------------------
 print("GOOD DAY! FANTASY HOCKEY 2025 VERSION")
-with open(f'{current_directory}/control_file.json', 'r') as f:
+
+with open(f'{current_directory}/manual_data/control_file.json', 'r') as f:
     control_file = json.loads(f.read())
 years_enabled = list(control_file['Years'].keys())
-# I can move these into the generalized system
+
 today = (datetime.now()).strftime('%Y-%m-%d')
 yesterday = (datetime.now() - timedelta(1)).strftime('%Y-%m-%d')
 print(f'Today: {today} >><< Yesterday: {yesterday}')
 
-# =============================================================================================
-operation_mode = input('Enter the operation mode (1 for Year-based, 2 for latest-live): ')
+# ==============================
+# OPERATION MODE SELECTION
+# ==============================
+operation_mode = args.mode or input('Enter the operation mode (1 for Year-based/manual, 2 for latest-live, 3 for custom): ')
+
 if operation_mode == '1':
-    year = input('Enter the year you want to reprocess (YYYY): ')
+    year = args.year or input('Enter the year you want to reprocess (YYYY): ')
     processing_type = 'REPROCESS'
+
 elif operation_mode == '2':
     year = int(max(years_enabled))
     print(f'Processing the latest live data for year(s): {year}')
     processing_type = 'LIVE'
-
     dates_to_check = [str(yesterday)]
+
 elif operation_mode == '3':
-    # special test case
     year = 2024
     dates_to_check = ['2024-10-22']
     processing_type = 'CUSTOM'
+
 else:
-    print('Incorrect operation mode. Please enter 1 or 2 next time')
+    print('Incorrect operation mode. Please enter 1, 2, or 3 next time.')
     exit()
 
-# =============================================================================================
-if operation_mode != '3' and operation_mode !='2':
-    dates_to_check = input(f"Enter the dates you want to run for year {year} (comma separated, e.g. {year}-01-01,{year}-01-02) OR ALL if you want everything in the season, OR ONWARD{year}-01-01 if you want everything  from a specific date onward: ").strip().split(',')
+# ==============================
+# DATE SELECTION LOGIC
+# ==============================
+if operation_mode not in ['2', '3']:
+    if args.dates:
+        dates_to_check = args.dates.strip().split(',')
+    else:
+        dates_to_check = input(
+            f"Enter the dates you want to run for year {year} "
+            f"(comma separated, e.g. {year}-01-01,{year}-01-02) OR ALL if you want everything, "
+            f"OR ONWARD{year}-01-01 if you want everything from a specific date onward: "
+        ).strip().split(',')
+
     if dates_to_check == ['ALL']:
         print('Grabbing all dates in the season...')
-        dates_to_check = pd.read_csv(f'{current_directory}/league_weeks_and_dates/{year}_league_weeks_and_dates.csv')['date'].unique()
+        dates_to_check = pd.read_csv(
+            f'{current_directory}/league_weeks_and_dates/{year}_league_weeks_and_dates.csv'
+        )['date'].unique()
+
     elif 'ONWARD' in dates_to_check[0]:
         print('Grabbing dates from specified date onward...')
-        onward_date = [x.replace('ONWARD','').strip() for x in dates_to_check if 'ONWARD' in x][0]
-        all_dates = pd.read_csv(f'{current_directory}/league_weeks_and_dates/{year}_league_weeks_and_dates.csv')['date'].unique()
+        onward_date = [x.replace('ONWARD', '').strip() for x in dates_to_check if 'ONWARD' in x][0]
+        all_dates = pd.read_csv(
+            f'{current_directory}/league_weeks_and_dates/{year}_league_weeks_and_dates.csv'
+        )['date'].unique()
         dates_to_check = [x for x in all_dates if x >= onward_date]
+
     else:
         print('Grabbing specific dates...')
         dates_to_check = [x.strip() for x in dates_to_check if x.strip()]
-print(f'>> Dates to check: {dates_to_check}')
 
-# =============================================================================================
+print(f'>> Dates to check: {dates_to_check}')
 print(f'Processing Year: {year}')
+
+# ==============================
+# MAIN PROCESSING OBJECT
+# ==============================
 yahoo_api_instance = YEAR_INSTANCE(control_file, current_directory, year, processing_type, dates_to_check)
 
-# Functions that either extract external data or should only be run once
-# yahoo_api_instance.NHL_schedule_parser()
-# yahoo_api_instance.extract_yahoo_draft_results()
-# yahoo_api_instance.extract_yahoo_transactions()
-yahoo_api_instance.extract_yahoo_rosters()
-# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-yahoo_api_instance.parse_HR_data()
-yahoo_api_instance.fuzzy_outer_merge_hr()
-# yahoo_api_instance.super_stitcher()
-# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-print('Running the experimental methods')
-# yahoo_api_instance.post_processor_matchup_matchups()
-# yahoo_api_instance.duckdb_test()
-# todo: SQLITE????
+# ==============================
+# AUTOMATION / INTERACTIVE MODES
+# ==============================
+if operation_mode == '2':
+    # === LIVE MODE: automatic standard pipeline ===
+    print("Running LIVE mode — executing transactions, rosters, and HR parsing.")
+    yahoo_api_instance.extract_yahoo_transactions()
+    yahoo_api_instance.extract_yahoo_rosters()
+    yahoo_api_instance.parse_HR_data()
+    yahoo_api_instance.fuzzy_outer_merge_hr()
+    print("✅ Live data processing complete.")
 
-'''
-Available methods from yahoo api:
-[
-'get_game_roster_positions_by_game_id', 'get_game_stat_categories_by_game_id',
-'get_game_weeks_by_game_id', 'get_league_draft_results', 'get_league_info', 
-'get_league_key', 'get_league_matchups_by_week', 'get_league_metadata', 
-'get_league_players', 'get_league_scoreboard_by_week', 'get_league_settings',
-'get_league_standings', 'get_league_teams', 'get_league_transactions',
-'get_player_draft_analysis', 'get_player_ownership', 'get_player_percent_owned_by_week', 
-'get_player_stats_by_date', 'get_player_stats_by_week', 'get_player_stats_for_season',
-'get_response', 'get_team_draft_results', 'get_team_info', 'get_team_matchups', 
-'get_team_metadata', 'get_team_roster_by_week', 'get_team_roster_player_info_by_date',
-'get_team_roster_player_info_by_week', 'get_team_roster_player_stats', 
-'get_team_roster_player_stats_by_week', 'get_team_standings', 'get_team_stats',
-'get_team_stats_by_week', 'get_user_games', 'get_user_leagues_by_game_key', ]
-'''
+elif operation_mode == '1':
+    # === MANUAL MODE: pick which methods to run ===
+    available_methods = {
+        '1': ('NHL_schedule_parser', yahoo_api_instance.NHL_schedule_parser),
+        '2': ('extract_yahoo_draft_results', yahoo_api_instance.extract_yahoo_draft_results),
+        '3': ('extract_yahoo_transactions', yahoo_api_instance.extract_yahoo_transactions),
+        '4': ('extract_yahoo_rosters', yahoo_api_instance.extract_yahoo_rosters),
+        '5': ('parse_HR_data', yahoo_api_instance.parse_HR_data),
+        '6': ('fuzzy_outer_merge_hr', yahoo_api_instance.fuzzy_outer_merge_hr),
+        '7': ('super_stitcher', yahoo_api_instance.super_stitcher),
+        '8': ('post_processor_matchup_matchups', yahoo_api_instance.post_processor_matchup_matchups),
+        '9': ('duckdb_test', yahoo_api_instance.duckdb_test),
+    }
+
+    print("\nAvailable methods to run:")
+    for k, v in available_methods.items():
+        print(f"  {k}. {v[0]}")
+
+    selected = input("\nEnter method numbers to run (comma separated, e.g. 3,4,5): ").split(',')
+
+    for s in selected:
+        s = s.strip()
+        if s in available_methods:
+            name, func = available_methods[s]
+            print(f"\n🔹 Running {name}()...")
+            try:
+                func()
+                print(f"✅ {name} completed successfully.")
+            except Exception as e:
+                print(f"⚠️ {name} failed: {e}")
+        else:
+            print(f"Skipping invalid selection: {s}")
+
+elif operation_mode == '3':
+    # === CUSTOM TEST MODE ===
+    print("Running CUSTOM mode.")
+    yahoo_api_instance.extract_yahoo_rosters()
+    yahoo_api_instance.parse_HR_data()
+    yahoo_api_instance.fuzzy_outer_merge_hr()
+
+print("\n🎯 Script completed successfully.")
