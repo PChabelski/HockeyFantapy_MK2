@@ -33,26 +33,34 @@ if operation_mode == '1':
     year = input('Enter the year you want to reprocess (YYYY): ')
     processing_type = 'REPROCESS'
 elif operation_mode == '2':
-    year = [max(years_enabled)]
+    year = int(max(years_enabled))
     print(f'Processing the latest live data for year(s): {year}')
     processing_type = 'LIVE'
+
+    dates_to_check = [str(yesterday)]
+elif operation_mode == '3':
+    # special test case
+    year = 2024
+    dates_to_check = ['2024-10-22']
+    processing_type = 'CUSTOM'
 else:
     print('Incorrect operation mode. Please enter 1 or 2 next time')
     exit()
 
 # =============================================================================================
-dates_to_check = input(f"Enter the dates you want to run for year {year} (comma separated, e.g. {year}-01-01,{year}-01-02) OR ALL if you want everything in the season, OR ONWARD{year}-01-01 if you want everything  from a specific date onward: ").strip().split(',')
-if dates_to_check == ['ALL']:
-    print('Grabbing all dates in the season...')
-    dates_to_check = pd.read_csv(f'{current_directory}/league_weeks_and_dates/{year}_league_weeks_and_dates.csv')['date'].unique()
-elif 'ONWARD' in dates_to_check[0]:
-    print('Grabbing dates from specified date onward...')
-    onward_date = [x.replace('ONWARD','').strip() for x in dates_to_check if 'ONWARD' in x][0]
-    all_dates = pd.read_csv(f'{current_directory}/league_weeks_and_dates/{year}_league_weeks_and_dates.csv')['date'].unique()
-    dates_to_check = [x for x in all_dates if x >= onward_date]
-else:
-    print('Grabbing specific dates...')
-    dates_to_check = [x.strip() for x in dates_to_check if x.strip()]
+if operation_mode != '3' and operation_mode !='2':
+    dates_to_check = input(f"Enter the dates you want to run for year {year} (comma separated, e.g. {year}-01-01,{year}-01-02) OR ALL if you want everything in the season, OR ONWARD{year}-01-01 if you want everything  from a specific date onward: ").strip().split(',')
+    if dates_to_check == ['ALL']:
+        print('Grabbing all dates in the season...')
+        dates_to_check = pd.read_csv(f'{current_directory}/league_weeks_and_dates/{year}_league_weeks_and_dates.csv')['date'].unique()
+    elif 'ONWARD' in dates_to_check[0]:
+        print('Grabbing dates from specified date onward...')
+        onward_date = [x.replace('ONWARD','').strip() for x in dates_to_check if 'ONWARD' in x][0]
+        all_dates = pd.read_csv(f'{current_directory}/league_weeks_and_dates/{year}_league_weeks_and_dates.csv')['date'].unique()
+        dates_to_check = [x for x in all_dates if x >= onward_date]
+    else:
+        print('Grabbing specific dates...')
+        dates_to_check = [x.strip() for x in dates_to_check if x.strip()]
 print(f'>> Dates to check: {dates_to_check}')
 
 # =============================================================================================
@@ -60,19 +68,18 @@ print(f'Processing Year: {year}')
 yahoo_api_instance = YEAR_INSTANCE(control_file, current_directory, year, processing_type, dates_to_check)
 
 # Functions that either extract external data or should only be run once
-# yahoo_api_instance.extract_player_metadata()
-#yahoo_api_instance.NHL_schedule_parser()
+# yahoo_api_instance.NHL_schedule_parser()
 # yahoo_api_instance.extract_yahoo_draft_results()
 # yahoo_api_instance.extract_yahoo_transactions()
-# yahoo_api_instance.get_team_roster_player_info_by_date()
-# yahoo_api_instance.fuzzy_outer_merge_nst()
-# yahoo_api_instance.hr_data_parse()
+yahoo_api_instance.extract_yahoo_rosters()
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+yahoo_api_instance.parse_HR_data()
 yahoo_api_instance.fuzzy_outer_merge_hr()
+# yahoo_api_instance.super_stitcher()
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 print('Running the experimental methods')
-yahoo_api_instance.post_processor_matchup_matchups()
-
-# todo: update NST data to include plus minus, shutouts, goalie wins, goalie losses, gaa... anything we may need for stats
+# yahoo_api_instance.post_processor_matchup_matchups()
+# yahoo_api_instance.duckdb_test()
 # todo: SQLITE????
 
 '''
