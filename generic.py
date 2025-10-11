@@ -26,8 +26,9 @@ class YEAR_INSTANCE:
     def __init__(self, control_file, current_directory, year, processing_type, dates_to_check):
         self.control_file       = control_file
         self.year               = year
-        self.league_id          = str(self.control_file['Years'][str(year)]['league_id'])
-        self.game_id            = int(self.control_file['Years'][str(year)]['game_id'])
+        self.stats_for_year     = self.control_file["Years"][str(self.year)]['scoring_categories']
+        self.league_id          = str(self.control_file['Years'][str(self.year)]['league_id'])
+        self.game_id            = int(self.control_file['Years'][str(self.year)]['game_id'])
         self.current_directory  = current_directory
         self.dates_to_check     = dates_to_check
         print(f'[{time.ctime()}] Initializing instance for Year {self.year} | League ID {self.league_id} | Game ID {self.game_id}')
@@ -53,7 +54,7 @@ class YEAR_INSTANCE:
         self.extract_yahoo_league_metadata()
         self.extract_yahoo_league_teams()
         self.extract_league_scoreboard_by_week()
-        self.extract_league_stat_categories()
+        #self.extract_league_stat_categories()
         self.extract_league_weeks_and_dates()
         self.extract_yahoo_league_standings()
         self.ref_list = pd.read_csv(f'{self.current_directory}/manual_data/Hockey_Team_Codes.csv')
@@ -340,37 +341,37 @@ class YEAR_INSTANCE:
         self.df_weeks.to_csv(output_file, index=False)
 
 
-    def extract_league_stat_categories(self):
-
-        print(f'[{time.ctime()}] extracting league stat categories for year {self.year}')
-        self.stat_categories = self.query.get_game_stat_categories_by_game_id(self.game_id).clean_data_dict()['stats']
-        cf_yh = self.control_file['yahoo_columns']
-
-        stat_arr = []
-        for stat_data in self.stat_categories:
-            stat = stat_data['stat'].clean_data_dict()
-            stat_name = stat.get('name', '?')
-            stat_active = True if stat_name in cf_yh.keys() and self.year in cf_yh[stat_name]['years_applicable'] else False
-            stat_value = cf_yh[stat_name]['value'] if stat_active else np.nan
-            stat_type = cf_yh[stat_name]['type'] if stat_active else np.nan
-
-            stat_arr.append({
-                'season': self.year,
-                'display_name': stat.get('display_name', '?'),
-                'name': stat.get('name', '?'),
-                'stat_id': stat.get('stat_id', '?'),
-                'stat_active': stat_active,
-                'stat_value': stat_value,
-                'stat_type': stat_type
-            })
-        # Create a DataFrame from the list of dictionaries
-        self.df_stats = pd.DataFrame(stat_arr)
-        output_dir = f'{self.current_directory}/league_stat_categories'
-        os.makedirs(output_dir, exist_ok=True)
-
-        # Save the DataFrame to a CSV file
-        output_file = f'{output_dir}/{self.year}_league_stat_categories.csv'
-        self.df_stats.to_csv(output_file, index=False)
+    # def extract_league_stat_categories(self):
+    #
+    #     print(f'[{time.ctime()}] extracting league stat categories for year {self.year}')
+    #     self.stat_categories = self.query.get_game_stat_categories_by_game_id(self.game_id).clean_data_dict()['stats']
+    #     cf_yh = self.control_file['yahoo_columns']
+    #
+    #     stat_arr = []
+    #     for stat_data in self.stat_categories:
+    #         stat = stat_data['stat'].clean_data_dict()
+    #         stat_name = stat.get('name', '?')
+    #         stat_active = True if stat_name in cf_yh.keys() and self.year in cf_yh[stat_name]['years_applicable'] else False
+    #         stat_value = cf_yh[stat_name]['value'] if stat_active else np.nan
+    #         stat_type = cf_yh[stat_name]['type'] if stat_active else np.nan
+    #
+    #         stat_arr.append({
+    #             'season': self.year,
+    #             'display_name': stat.get('display_name', '?'),
+    #             'name': stat.get('name', '?'),
+    #             'stat_id': stat.get('stat_id', '?'),
+    #             'stat_active': stat_active,
+    #             'stat_value': stat_value,
+    #             'stat_type': stat_type
+    #         })
+    #     # Create a DataFrame from the list of dictionaries
+    #     self.df_stats = pd.DataFrame(stat_arr)
+    #     output_dir = f'{self.current_directory}/league_stat_categories'
+    #     os.makedirs(output_dir, exist_ok=True)
+    #
+    #     # Save the DataFrame to a CSV file
+    #     output_file = f'{output_dir}/{self.year}_league_stat_categories.csv'
+    #     self.df_stats.to_csv(output_file, index=False)
 
     def extract_league_scoreboard_by_week(self):
         # Check the # of weeks for this year
@@ -790,6 +791,7 @@ class YEAR_INSTANCE:
 
 
         def data_extractor(team_code, team, soup):
+            print('>>>> Extracting HR data for team:', team, '(', team_code, ')')
             tables_dict = {
                 f'{team_code}_goalies': {
                     'row_key': 1
@@ -914,205 +916,6 @@ class YEAR_INSTANCE:
 ######################################################################################################
 ######################################################################################################
 ######################################################################################################
-
-    def fuzzy_outer_merge_nst(self):
-        """
-        Outer merge Yahoo and NST on fuzzy name matching.
-        Keeps all rows from both dataframes, with match metadata.
-        """
-
-        def normalize_name(s: str) -> str:
-            """Lowercase, strip accents, remove punctuation/extra spaces."""
-            if s is None:
-                return ""
-            s = str(s)
-            s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("utf-8")
-            return " ".join(re.sub(r"[^a-z ]", " ", s.lower()).split())
-
-        def levenshtein(s1: str, s2: str) -> int:
-            """Compute Levenshtein distance between two strings."""
-            if len(s1) < len(s2):
-                return levenshtein(s2, s1)
-            if len(s2) == 0:
-                return len(s1)
-
-            prev_row = range(len(s2) + 1)
-            for i, c1 in enumerate(s1):
-                curr_row = [i + 1]
-                for j, c2 in enumerate(s2):
-                    insertions = prev_row[j + 1] + 1
-                    deletions = curr_row[j] + 1
-                    substitutions = prev_row[j] + (c1 != c2)
-                    curr_row.append(min(insertions, deletions, substitutions))
-                prev_row = curr_row
-            return prev_row[-1]
-
-        def levenshtein_ratio(s1: str, s2: str) -> float:
-            """Convert distance to similarity ratio (0–100)."""
-            if not s1 and not s2:
-                return 100.0
-            dist = levenshtein(s1, s2)
-            return 100.0 * (1 - dist / max(len(s1), len(s2)))
-
-        ############
-        # MAIN BODY
-        ############
-        for date in self.dates_to_check:
-            ########################
-            df_yahoo = pd.read_csv(f'{self.current_directory}/team_rosters_by_date/{self.year}/{self.year}_rosters_{date}.csv')
-            df_nst = pd.read_csv(f'{self.current_directory}/nst_data/{self.year}/NST_Stats_{date}.csv')
-            if len(df_nst) == 0:
-                print(f'No data to fuzzy merge for date {date} in year {self.year} -> likely a day off')
-                continue
-            threshold = 85
-            nst_col = 'Player'
-            yahoo_col = 'name'
-            #########################
-            # Normalize names
-            nst_names = df_nst[nst_col].dropna().astype(str).tolist()
-            yahoo_names = df_yahoo[yahoo_col].dropna().astype(str).tolist()
-            nst_norm = {name: normalize_name(name) for name in nst_names}
-            yahoo_norm = {name: normalize_name(name) for name in yahoo_names}
-
-            # Track matched Yahoo players
-            matched_yahoo = set()
-            merged_rows = []
-
-            # Pass 1: go through NST and try to find Yahoo matches
-            for _, n_row in df_nst.iterrows():
-                n_name = str(n_row[nst_col])
-                n_norm = normalize_name(n_name)
-
-                best_score, best_orig = -1, None
-                for orig, norm in yahoo_norm.items():
-                    score = levenshtein_ratio(n_norm, norm)
-                    if score > best_score:
-                        best_score, best_orig = score, orig
-
-                match_ok = best_score >= threshold
-                y_row = df_yahoo[df_yahoo[yahoo_col] == best_orig].iloc[0].to_dict() if match_ok else {}
-
-                if match_ok:
-                    matched_yahoo.add(best_orig)
-
-                row = {**n_row, **y_row}
-                row.update({
-                    "Yahoo_BestGuess": best_orig,
-                    "Score": round(best_score, 1) if best_score >= 0 else 0,
-                    "MATCH": match_ok
-                })
-                merged_rows.append(row)
-
-            # Pass 2: add unmatched Yahoo players
-            for _, y_row in df_yahoo.iterrows():
-                y_name = str(y_row[yahoo_col])
-                if y_name not in matched_yahoo:
-                    row = {**y_row}
-                    row.update({
-                        nst_col: None,
-                        "Yahoo_BestGuess": y_name,
-                        "Score": 0,
-                        "MATCH": False
-                    })
-                    merged_rows.append(row)
-
-            df_out =  pd.DataFrame(merged_rows)
-
-            df_out = df_out[[
-                'season',
-                'Date',
-                'Code',
-                'Player' ,
-                'name'    ,
-                'MATCH',
-                'Score',
-                'player_id'    ,
-                'player_key'   ,
-                'display_position' ,
-                'injury_note',
-                'is_keeper'   ,
-                'keeper_cost'  ,
-                'kept'    ,
-                'owner_team_key' ,
-                'owner_team_name' ,
-                'owner_team_gm',
-                'selected_position',
-                'eligible_positions',
-                'percent_owned'   ,
-                'percent_owned_delta' ,
-                'date',
-                'Score'  ,
-                'MATCH' ,
-                'Team'   ,
-                'Position'  ,
-                'GP'    ,
-                'TOI'    ,
-                'Goals' ,
-                'Total Assists'  ,
-                'First Assists'  ,
-                'Second Assists',
-                'Total Points',
-                'PPP',
-                'SHP',
-                'IPP'   ,
-                'Shots'  ,
-                'SH%' ,
-                'ixG'  ,
-                'iCF'  ,
-                'iFF'  ,
-                'iSCF' ,
-                'iHDCF'  ,
-                'Rush Attempts' ,
-                'Rebounds Created' ,
-                'PIM'   ,
-                'Total Penalties'   ,
-                'Minor'  ,
-                'Major'   ,
-                'Misconduct'   ,
-                'Penalties Drawn'  ,
-                'Giveaways',
-                'Takeaways' ,
-                'Hits'    ,
-                'Hits Taken' ,
-                'Shots Blocked',
-                'Faceoffs Won' ,
-                'Faceoffs Lost' ,
-                'Faceoffs %' ,
-                'Shots Against' ,
-                'Saves'    ,
-                'Goals Against',
-                'SV%' ,
-                'GAA'  ,
-                'GSAA'    ,
-                'xG Against'  ,
-                'HD Shots Against',
-                'HD Saves' ,
-                'HD Goals Against'  ,
-                'HDSV%' ,
-                'HDGAA'  ,
-                'HDGSAA'  ,
-                'MD Shots Against',
-                'MD Saves'    ,
-                'MD Goals Against' ,
-                'MDSV%' ,
-                'MDGAA'   ,
-                'MDGSAA'  ,
-                'LD Shots Against'  ,
-                'LD Saves'  ,
-                'LD Goals Against' ,
-                'LDSV%' ,
-                'LDGAA',
-                'LDGSAA'    ,
-                'Rush Attempts Against' ,
-                'Rebound Attempts Against' ,
-                'Avg. Shot Distance'  ,
-                'Avg. Goal Distance'
-            ]]
-            df_out['Date'] = date
-            df_out['season'] = self.year
-            df_out.columns = df_out.columns.str.upper()
-            df_out.to_csv(f'{self.current_directory}/fuzzy_merged_yahoo_nst/{self.year}_fuzzy_merged_yahoo_nst_{date}.csv',
-                          index=False)
 
     def fuzzy_outer_merge_hr(self):
         """
@@ -1340,39 +1143,47 @@ class YEAR_INSTANCE:
         except FileNotFoundError:
             print(f'>>>> [Rundate: {time.ctime()}] No schedule found for {self.year}. Skipping post-processing - make sure the data is available.')
             return
-
         for week in df_weeks['week'].unique():
             print(f'Post-processing week {week}...')
             df_week_matchups = pd.DataFrame()
 
+            # Stitch together all the dates in this week
             for date in df_weeks[df_weeks['week'] == week]['date'].unique():
                 # grab the associated fuzzy-matched data for this date, stitch them together for the entire week
                 try:
-                    df_fuzzy = pd.read_csv(f'{self.current_directory}/fuzzy_merged_yahoo_hr/{self.year}_fuzzy_merged_yahoo_hr_{date}.csv')
+                    df_fuzzy = pd.read_csv(f'{self.current_directory}/merged_daily_data/{self.year}/{self.year}_merged_yahoo_hr_{date}.csv')
                 except FileNotFoundError:
                     print(f'No fuzzy-merged data found for date {date}. Skipping.')
                     continue
                 df_week_matchups = pd.concat([df_week_matchups,df_fuzzy])
-
+            if len(df_week_matchups)==0:
+                print(f'No fuzzy-merged data found for week {week}. Skipping.')
+                continue
             # Now we have the full week's fuzzy-merged data in df_week_matchups
             df_week_matchups['PLAY_OR_BENCH'] = df_week_matchups.apply(lambda row: 'PLAY' if row['SELECTED_POSITION'] in ['C','LW','RW','D','G','Util'] else 'BENCH', axis=1)
             df_week_matchups['GTOI'] = 0
             mask = df_week_matchups["DISPLAY_POSITION"].isin(['G'])
             df_week_matchups.loc[mask, "GTOI"] = df_week_matchups.loc[mask, "TOI"]
+            # convert TOI and GTOI to float minutes
+            df_week_matchups['TOI'] = df_week_matchups['TOI'].apply(lambda x: float(x.split(':')[0]) + float(x.split(':')[1]) / 60 if isinstance(x, str) and ':' in x else 0)
+            df_week_matchups['GTOI'] = df_week_matchups['GTOI'].apply(lambda x: float(x.split(':')[0]) + float(x.split(':')[1]) / 60 if isinstance(x, str) and ':' in x else 0)
+
 
             # Now we can cycle through each GM and PLAY_OR_BENCH to sum up the appropriate stats
-            df_week_matchups_play = df_week_matchups[df_week_matchups['PLAY_OR_BENCH'] == 'PLAY']
-            df_week_matchups_bench = df_week_matchups[df_week_matchups['PLAY_OR_BENCH'] == 'BENCH']
+            df_week_matchups_play = df_week_matchups[df_week_matchups['PLAY_OR_BENCH'] == 'PLAY'].fillna(0)
+            df_week_matchups_play = df_week_matchups_play[df_week_matchups_play['PLAYER']!=0]
+            df_week_matchups_play.to_csv(f'{self.current_directory}/debug_files/{self.year}_week_{week}_play.csv', index=False)
+            df_week_matchups_bench = df_week_matchups[df_week_matchups['PLAY_OR_BENCH'] == 'BENCH'].fillna(0)
+            df_week_matchups_bench = df_week_matchups_bench[df_week_matchups_bench['PLAYER']!=0]
 
-
-
+            # Grab all the "useful" columns
             df_week_play_summary = df_week_matchups_play.groupby(['OWNER_TEAM_KEY','OWNER_TEAM_NAME','OWNER_TEAM_GM','PLAY_OR_BENCH']).agg({
                 "G":"sum",
                 "A":"sum",
                 "+/-": "sum",
                 "PIM": "sum",
-                "PP":"sum",
-                "SH":"sum",
+                "PPP":"sum",
+                "SHP":"sum",
                 "S": "sum",
                 "GW":"sum",
                 "HIT":"sum",
@@ -1395,8 +1206,8 @@ class YEAR_INSTANCE:
                 "A":"sum",
                 "+/-": "sum",
                 "PIM": "sum",
-                "PP":"sum",
-                "SH":"sum",
+                "PPP":"sum",
+                "SHP":"sum",
                 "S": "sum",
                 "GW":"sum",
                 "HIT":"sum",
@@ -1446,7 +1257,7 @@ class YEAR_INSTANCE:
 
             # now let's compare to our derived stats and see if they align
             # todo: need to add this to a config
-            cols_of_interest = ['G','A','+/-','PIM','PP','SH','S','HIT','BLK','WIN','S%','SV%','GAA','SO']
+            cols_of_interest = self.stats_for_year
             reverse_cols = ['GAA']
 
             # Initialize score column
@@ -1484,8 +1295,6 @@ class YEAR_INSTANCE:
             for i in range(0,len(df_week_summary_play)):
                 if df_week_summary_play['YAHOO_SCORE'].iloc[i] != df_week_summary_play['CALC_SCORE'].iloc[i]:
                     print(f"Found a delta in Week {week} {df_week_summary_play['MATCHUP_ID'].iloc[i]} {df_week_summary_play['OWNER_TEAM_GM'].iloc[i]}, as Yahoo score: {df_week_summary_play['YAHOO_SCORE'].iloc[i]} and calc score: {df_week_summary_play['CALC_SCORE'].iloc[i]}")
-
-
             df_week_summary.to_csv(f'{self.current_directory}/matchup_summaries_by_week/{self.year}_matchup_summary_week_{week}.csv', index=False)
 
 

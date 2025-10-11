@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import argparse
 from generic import YEAR_INSTANCE
+import traceback
 
 # ==============================
 # CONFIGURATION & INITIALIZATION
@@ -147,6 +148,8 @@ elif operation_mode == '1':
                 print(f"✅ {name} completed successfully.")
             except Exception as e:
                 print(f"⚠️ {name} failed: {e}")
+                tb_str = traceback.format_exc()
+                print(tb_str)
         else:
             print(f"Skipping invalid selection: {s}")
 
