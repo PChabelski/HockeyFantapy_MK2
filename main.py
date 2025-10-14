@@ -130,6 +130,7 @@ elif operation_mode == '1':
         '7': ('super_stitcher', yahoo_api_instance.super_stitcher),
         '8': ('post_processor_matchup_matchups', yahoo_api_instance.post_processor_matchup_matchups),
         '9': ('duckdb_test', yahoo_api_instance.duckdb_test),
+        '10': ('next_game_how_you_do', yahoo_api_instance.next_game_how_you_do)
     }
 
     print("\nAvailable methods to run:")

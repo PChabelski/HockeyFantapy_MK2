@@ -59,7 +59,6 @@ class YEAR_INSTANCE:
         self.extract_yahoo_league_standings()
         self.ref_list = pd.read_csv(f'{self.current_directory}/manual_data/Hockey_Team_Codes.csv')
 
-
     def extract_yahoo_league_metadata(self):
         """
         Extracts and saves Yahoo Fantasy Sports league metadata as a CSV file.
@@ -275,7 +274,6 @@ class YEAR_INSTANCE:
         os.makedirs(output_dir, exist_ok=True)
         self.df_sched.to_csv(f'{output_dir}/{self.year}_NHL_Schedule.csv', index=False)
 
-
     def identical_names_handler(self, df, dbtype):
         """
         Handles identical player names by appending middle names based on unique identifiers.
@@ -339,39 +337,6 @@ class YEAR_INSTANCE:
         # Save the DataFrame to a CSV file
         output_file = f'{output_dir}/{self.year}_league_weeks_and_dates.csv'
         self.df_weeks.to_csv(output_file, index=False)
-
-
-    # def extract_league_stat_categories(self):
-    #
-    #     print(f'[{time.ctime()}] extracting league stat categories for year {self.year}')
-    #     self.stat_categories = self.query.get_game_stat_categories_by_game_id(self.game_id).clean_data_dict()['stats']
-    #     cf_yh = self.control_file['yahoo_columns']
-    #
-    #     stat_arr = []
-    #     for stat_data in self.stat_categories:
-    #         stat = stat_data['stat'].clean_data_dict()
-    #         stat_name = stat.get('name', '?')
-    #         stat_active = True if stat_name in cf_yh.keys() and self.year in cf_yh[stat_name]['years_applicable'] else False
-    #         stat_value = cf_yh[stat_name]['value'] if stat_active else np.nan
-    #         stat_type = cf_yh[stat_name]['type'] if stat_active else np.nan
-    #
-    #         stat_arr.append({
-    #             'season': self.year,
-    #             'display_name': stat.get('display_name', '?'),
-    #             'name': stat.get('name', '?'),
-    #             'stat_id': stat.get('stat_id', '?'),
-    #             'stat_active': stat_active,
-    #             'stat_value': stat_value,
-    #             'stat_type': stat_type
-    #         })
-    #     # Create a DataFrame from the list of dictionaries
-    #     self.df_stats = pd.DataFrame(stat_arr)
-    #     output_dir = f'{self.current_directory}/league_stat_categories'
-    #     os.makedirs(output_dir, exist_ok=True)
-    #
-    #     # Save the DataFrame to a CSV file
-    #     output_file = f'{output_dir}/{self.year}_league_stat_categories.csv'
-    #     self.df_stats.to_csv(output_file, index=False)
 
     def extract_league_scoreboard_by_week(self):
         # Check the # of weeks for this year
@@ -634,8 +599,6 @@ class YEAR_INSTANCE:
         df_trans.columns = df_trans.columns.str.upper()
         df_trans.to_csv(f'{self.current_directory}/league_transactions/{self.year}_transactions.csv', index=False)
 
-
-
     def extract_yahoo_draft_results(self):
         print(f'[{time.ctime()}] extracting draft information for year {self.year}')
         draft_arr = []
@@ -702,9 +665,6 @@ class YEAR_INSTANCE:
         self.df_draft.columns = self.df_draft.columns.str.upper()
         self.df_draft.to_csv(output_file, index=False)
 
-    # Lock this away for now, as it is not working properly
-    # It might have to be a live-system only query... let's figure out what historic data we can actually pull properly
-    #
     def extract_yahoo_rosters(self):
         print(f'[{time.ctime()}] Getting yahoo team roster player info for year {self.year}')
         df_league_weeks_and_dates = pd.read_csv(f'{self.current_directory}/league_weeks_and_dates/{self.year}_league_weeks_and_dates.csv')
@@ -768,9 +728,6 @@ class YEAR_INSTANCE:
             date_df.to_csv(output_file, index=False)
             time.sleep(10)  # Sleep for 10 seconds to avoid API rate limits
 
-    ######################################################################################################
-    ######################################################################################################
-    ######################################################################################################
     def parse_HR_data(self):
         import os
         import time
@@ -931,7 +888,6 @@ class YEAR_INSTANCE:
             first_name = fullname_str.split(" ")[0]
             last_name = " ".join(fullname_str.split(" ")[1:]) if len(fullname_str.split(" ")) > 1 else ""
 
-
             name_dict = {
                 'Alexander': 'Alex',
                 'Anthony': 'Tony',
@@ -947,6 +903,7 @@ class YEAR_INSTANCE:
                 'Jonathan': 'John',
                 'Johnathan': 'John',
                 'Joseph': 'Joe',
+                'Matthew': 'Matt',
                 'Michael': 'Mike',
                 'Mitchell':'Mitch',
                 'Nicholas': 'Nick',
@@ -962,7 +919,6 @@ class YEAR_INSTANCE:
             clean_name = first_name + " " + last_name
             d = unicodedata.normalize("NFKD", clean_name).encode("ascii", "ignore").decode("utf-8")
             final = " ".join(re.sub(r"[^a-z ]", " ", d.lower()).split())
-            #print(f'Converted {fullname} to {clean_name} and returning {final}')
             return final
 
         def levenshtein(s1: str, s2: str) -> int:
@@ -1057,9 +1013,9 @@ class YEAR_INSTANCE:
                     merged_rows.append(row)
 
             df_out =  pd.DataFrame(merged_rows)
-            df_out['Date'] = date
-            df_out['season'] = self.year
-            df_out['Week']= pd.read_csv(f'{self.current_directory}/league_weeks_and_dates/{self.year}_league_weeks_and_dates.csv').set_index('date').loc[date]['week'] if date in pd.read_csv(f'{self.current_directory}/league_weeks_and_dates/{self.year}_league_weeks_and_dates.csv')['date'].values else 0
+            df_out['DATE'] = date
+            df_out['SEASON'] = self.year
+            df_out['WEEK']= pd.read_csv(f'{self.current_directory}/league_weeks_and_dates/{self.year}_league_weeks_and_dates.csv').set_index('date').loc[date]['week'] if date in pd.read_csv(f'{self.current_directory}/league_weeks_and_dates/{self.year}_league_weeks_and_dates.csv')['date'].values else 0
             df_out.columns = df_out.columns.str.upper()
             df_out = df_out[['SEASON',
             'WEEK',
@@ -1153,13 +1109,14 @@ class YEAR_INSTANCE:
                 try:
                     df_fuzzy = pd.read_csv(f'{self.current_directory}/merged_daily_data/{self.year}/{self.year}_merged_yahoo_hr_{date}.csv')
                 except FileNotFoundError:
-                    print(f'No fuzzy-merged data found for date {date}. Skipping.')
+                    #print(f'No fuzzy-merged data found for date {date}. Skipping.')
                     continue
                 df_week_matchups = pd.concat([df_week_matchups,df_fuzzy])
             if len(df_week_matchups)==0:
-                print(f'No fuzzy-merged data found for week {week}. Skipping.')
+                #print(f'No fuzzy-merged data found for week {week}. Skipping.')
                 continue
             # Now we have the full week's fuzzy-merged data in df_week_matchups
+            df_week_matchups = df_week_matchups[(df_week_matchups['PLAYER']!=0)&(df_week_matchups['PLAYER'].notna())]
             df_week_matchups['PLAY_OR_BENCH'] = df_week_matchups.apply(lambda row: 'PLAY' if row['SELECTED_POSITION'] in ['C','LW','RW','D','G','Util'] else 'BENCH', axis=1)
             df_week_matchups['GTOI'] = 0
             mask = df_week_matchups["DISPLAY_POSITION"].isin(['G'])
@@ -1167,14 +1124,51 @@ class YEAR_INSTANCE:
             # convert TOI and GTOI to float minutes
             df_week_matchups['TOI'] = df_week_matchups['TOI'].apply(lambda x: float(x.split(':')[0]) + float(x.split(':')[1]) / 60 if isinstance(x, str) and ':' in x else 0)
             df_week_matchups['GTOI'] = df_week_matchups['GTOI'].apply(lambda x: float(x.split(':')[0]) + float(x.split(':')[1]) / 60 if isinstance(x, str) and ':' in x else 0)
+            df_week_matchups['MISSED_START'] = 0 # initialize as 0, then check;if you find a missed start, flag as 1
+            # Missed start check
+            # A bit greasy, maybe this can be refactored once it works # todo refactor
+            for team in df_week_matchups['OWNER_TEAM_NAME'].unique():
+                df_team = df_week_matchups[df_week_matchups['OWNER_TEAM_NAME'] == team]
+                for date in df_team['DATE'].unique():
+                    df_team_date = df_team[df_team['DATE'] == date]
+                    # Derive the number of available spots
+                    centres_avail = 2 - len(df_team_date[df_team_date['SELECTED_POSITION'] == 'C'])
+                    left_wings_avail = 2-  len(df_team_date[df_team_date['SELECTED_POSITION'] == 'LW'])
+                    right_wings_avail =2- len(df_team_date[df_team_date['SELECTED_POSITION'] == 'RW'])
+                    defencemen_avail = 4- len(df_team_date[df_team_date['SELECTED_POSITION'] == 'D'])
+                    goalies_avail = 2- len(df_team_date[df_team_date['SELECTED_POSITION'] == 'G'])
+                    util_avail = 1- len(df_team_date[df_team_date['SELECTED_POSITION'] == 'Util'])
+                    for player in df_team_date['PLAYER'].unique():
+                        if df_team_date[(df_team_date['PLAYER'] == player)]['SELECTED_POSITION'].values[0] == 'BN':
+                            possible_positions = df_team_date[(df_team_date['PLAYER'] == player)]['DISPLAY_POSITION'].values[0].split(',')
+                            for pos in possible_positions:
+                                pos = pos.strip()
+                                if pos == 'C' and (centres_avail > 0 or util_avail > 0):
+                                    df_week_matchups.loc[(df_week_matchups['PLAYER'] == player) & (df_week_matchups['DATE'] == date), 'MISSED_START'] = 1
+                                elif pos == 'LW' and (left_wings_avail > 0 or util_avail > 0):
+                                    df_week_matchups.loc[(df_week_matchups['PLAYER'] == player) & (df_week_matchups['DATE'] == date), 'MISSED_START'] = 1
+                                elif pos == 'RW' and (right_wings_avail > 0  or util_avail > 0):
+                                    df_week_matchups.loc[(df_week_matchups['PLAYER'] == player) & (df_week_matchups['DATE'] == date), 'MISSED_START'] = 1
+                                elif pos == 'D' and (defencemen_avail > 0  or util_avail > 0):
+                                    df_week_matchups.loc[(df_week_matchups['PLAYER'] == player) & (df_week_matchups['DATE'] == date), 'MISSED_START'] = 1
+                                elif pos == 'G' and (goalies_avail > 0):
+                                    df_week_matchups.loc[(df_week_matchups['PLAYER'] == player) & (df_week_matchups['DATE'] == date), 'MISSED_START'] = 1
+                                else:
+                                    # No change - player couldn't be played, so it's all good. Already initialized to 0
+                                    pass
 
 
             # Now we can cycle through each GM and PLAY_OR_BENCH to sum up the appropriate stats
             df_week_matchups_play = df_week_matchups[df_week_matchups['PLAY_OR_BENCH'] == 'PLAY'].fillna(0)
             df_week_matchups_play = df_week_matchups_play[df_week_matchups_play['PLAYER']!=0]
-            df_week_matchups_play.to_csv(f'{self.current_directory}/debug_files/{self.year}_week_{week}_play.csv', index=False)
+            df_week_matchups_play['SKATER_COUNT'] = df_week_matchups_play['SELECTED_POSITION'].apply(lambda row: 1 if row in ['C','LW','RW','D','Util'] else 0)
+            df_week_matchups_play['GOALIE_COUNT'] = df_week_matchups_play['SELECTED_POSITION'].apply(lambda row: 1 if row in ['G'] else 0)
+
+
             df_week_matchups_bench = df_week_matchups[df_week_matchups['PLAY_OR_BENCH'] == 'BENCH'].fillna(0)
             df_week_matchups_bench = df_week_matchups_bench[df_week_matchups_bench['PLAYER']!=0]
+            df_week_matchups_bench['SKATER_COUNT'] = df_week_matchups_bench['ELIGIBLE_POSITIONS'].apply(lambda row: 1 if row != "['G']" else 0)
+            df_week_matchups_bench['GOALIE_COUNT'] = df_week_matchups_bench['ELIGIBLE_POSITIONS'].apply(lambda row: 1 if row == "['G']" else 0)
 
             # Grab all the "useful" columns
             df_week_play_summary = df_week_matchups_play.groupby(['OWNER_TEAM_KEY','OWNER_TEAM_NAME','OWNER_TEAM_GM','PLAY_OR_BENCH']).agg({
@@ -1195,12 +1189,30 @@ class YEAR_INSTANCE:
                 "SA": "sum",
                 "SO": "sum",
                 "TOI": "sum",
-            "GTOI": "sum"}).reset_index()
+                "GTOI": "sum",
+                "SKATER_COUNT": "sum",
+                "GOALIE_COUNT": "sum",
+                "MISSED_START": "sum"
+            }).reset_index()
 
             df_week_play_summary['S%'] = round(df_week_play_summary['G'] / df_week_play_summary['S'].replace(0, np.nan),3)
             df_week_play_summary['SV%'] = round(df_week_play_summary['SV'] / df_week_play_summary['SA'].replace(0, np.nan),3)
             df_week_play_summary['GAA'] = round((df_week_play_summary['GA'] * 60) / df_week_play_summary['GTOI'].replace(0, np.nan),2)
+            df_week_play_summary['GOALIE_STARTS_MET'] = df_week_play_summary['GOALIE_COUNT'].apply(lambda x: True if x >= 3 else False)
 
+            # Apply minimum goalie count penalty
+            df_week_play_summary['WIN'] = df_week_play_summary.apply(lambda row: row['WIN'] if row['GOALIE_STARTS_MET'] else -1, axis=1)
+            df_week_play_summary['LOSS'] = df_week_play_summary.apply(lambda row: row['LOSS'] if row['GOALIE_STARTS_MET'] else 10, axis=1)
+            df_week_play_summary['SV'] = df_week_play_summary.apply(lambda row: row['SV'] if row['GOALIE_STARTS_MET'] else 0, axis=1)
+            df_week_play_summary['GA'] = df_week_play_summary.apply(lambda row: row['GA'] if row['GOALIE_STARTS_MET'] else 100, axis=1)
+            df_week_play_summary['SA'] = df_week_play_summary.apply(lambda row: row['SA'] if row['GOALIE_STARTS_MET'] else -1, axis=1)
+            df_week_play_summary['SO'] = df_week_play_summary.apply(lambda row: row['SO'] if row['GOALIE_STARTS_MET'] else -1, axis=1)
+            df_week_play_summary['SV%'] = df_week_play_summary.apply(lambda row: row['SV%'] if row['GOALIE_STARTS_MET'] else 0.5, axis=1)
+            df_week_play_summary['GAA'] = df_week_play_summary.apply(lambda row: row['GAA'] if row['GOALIE_STARTS_MET'] else 10, axis=1)
+
+
+
+            # Agg the bench players now
             df_week_bench_summary = df_week_matchups_bench.groupby(['OWNER_TEAM_KEY','OWNER_TEAM_NAME','OWNER_TEAM_GM','PLAY_OR_BENCH']).agg({
                 "G":"sum",
                 "A":"sum",
@@ -1219,7 +1231,11 @@ class YEAR_INSTANCE:
                 "SA": "sum",
                 "SO":"sum",
                 "TOI": "sum",
-            "GTOI": "sum"}).reset_index()
+                "GTOI": "sum",
+                "SKATER_COUNT": "sum",
+                "GOALIE_COUNT": "sum",
+                "MISSED_START": "sum"
+            }).reset_index()
 
             df_week_bench_summary['S%'] = round(df_week_bench_summary['G'] / df_week_bench_summary['S'].replace(0, np.nan),3)
             df_week_bench_summary['SV%'] = round(df_week_bench_summary['SV'] / df_week_bench_summary['SA'].replace(0, np.nan),3)
@@ -1256,9 +1272,8 @@ class YEAR_INSTANCE:
                 df_week_summary.loc[mask, "YAHOO_RESULT"] = team_b_result
 
             # now let's compare to our derived stats and see if they align
-            # todo: need to add this to a config
             cols_of_interest = self.stats_for_year
-            reverse_cols = ['GAA']
+            reverse_cols = ['GAA', 'LOSS']
 
             # Initialize score column
             df_week_summary['CALC_SCORE'] = 0
@@ -1287,6 +1302,15 @@ class YEAR_INSTANCE:
                 for i, idx in enumerate(group_reset['index']):
                     df_week_summary_play.at[idx, 'CALC_SCORE'] = wins[i]
 
+            # derive the roto-score for each GM
+            for col in cols_of_interest:
+                if col in reverse_cols:
+                    df_week_summary_play[col + '_RANK'] = df_week_summary_play[col].rank(ascending=False,pct=True).round(2)
+                else:
+                    df_week_summary_play[col + '_RANK'] = df_week_summary_play[col].rank(ascending=True,pct=True).round(2)
+            df_week_summary_play['ROTO_SCORE'] = df_week_summary_play[[col + '_RANK' for col in cols_of_interest]].sum(axis=1)
+
+            # Check if there are any goalie failures (i.e. no goalie played in the week)
 
             df_week_summary = pd.concat([df_week_summary_bench,df_week_summary_play])
 
@@ -1294,10 +1318,83 @@ class YEAR_INSTANCE:
             # Finally, let's do a sanity check on the CALC_SCORE and SCORE columns to see where the deltas are
             for i in range(0,len(df_week_summary_play)):
                 if df_week_summary_play['YAHOO_SCORE'].iloc[i] != df_week_summary_play['CALC_SCORE'].iloc[i]:
-                    print(f"Found a delta in Week {week} {df_week_summary_play['MATCHUP_ID'].iloc[i]} {df_week_summary_play['OWNER_TEAM_GM'].iloc[i]}, as Yahoo score: {df_week_summary_play['YAHOO_SCORE'].iloc[i]} and calc score: {df_week_summary_play['CALC_SCORE'].iloc[i]}")
-            df_week_summary.to_csv(f'{self.current_directory}/matchup_summaries_by_week/{self.year}_matchup_summary_week_{week}.csv', index=False)
+                    print(f"Found a delta in Week {week} Matchup {df_week_summary_play['MATCHUP_ID'].iloc[i]} {df_week_summary_play['OWNER_TEAM_GM'].iloc[i]}, as Yahoo score: {df_week_summary_play['YAHOO_SCORE'].iloc[i]} and calc score: {df_week_summary_play['CALC_SCORE'].iloc[i]}")
+
+            df_week_summary = df_week_summary[df_week_summary['OWNER_TEAM_KEY']!=0]
+            # And output the data
+            df_week_summary = df_week_summary[[
+            'OWNER_TEAM_KEY',
+            'OWNER_TEAM_NAME',
+            'OWNER_TEAM_GM',
+            'PLAY_OR_BENCH',
+            'G',
+            'A',
+            '+/-',
+            'PIM',
+            'PPP',
+            'SHP',
+            'S',
+            'S%',
+            'HIT',
+            'BLK',
+            'GW',
+            'WIN',
+            'LOSS',
+            'GA',
+            'GAA',
+            'SV',
+            'SA',
+            'SV%',
+            'SO',
+            'TOI',
+            'GTOI',
+            'SKATER_COUNT',
+            'GOALIE_COUNT',
+            'MISSED_START',
+            'GOALIE_STARTS_MET',
+            'MATCHUP_ID',
+            'YAHOO_SCORE',
+            'YAHOO_RESULT',
+            'IS_PLAYOFF',
+            'CALC_SCORE',
+            'ROTO_SCORE',
+            ]]
+            os.makedirs(f'{self.current_directory}/matchup_summaries_by_week/{self.year}', exist_ok=True)
+            df_week_summary.to_csv(f'{self.current_directory}/matchup_summaries_by_week/{self.year}/{self.year}_matchup_summary_week_{week}.csv', index=False)
 
 
+    ########################################################################################
+    def next_game_how_you_do(self):
+        # for every drop, check the player's next game and see how well they did
+        print(f'[{time.ctime()}] Analyzing next-game performance for dropped players in year {self.year}')
+        df_trans = pd.read_csv(f'{self.current_directory}/league_transactions/{self.year}_transactions.csv')
+        df_drops = df_trans[df_trans['TRANSACTION_TYPE']=='drop']
+        all_dates = pd.read_csv(f'{self.current_directory}/league_weeks_and_dates/{self.year}_league_weeks_and_dates.csv')['date'].unique()
+        for player, i in df_drops.iterrows():
+            player_id = i['PLAYER_ID']
+            player_name = i['NAME']
+            drop_date = i['TRANSACTION_DATE'].split(' ')[0]
+            dates_to_check = [x for x in all_dates if x >= drop_date]
+            dates_to_check = dates_to_check[:7]  # only check the next 7 days
+            print(f'Analyzing next game for dropped player {player_name} (ID: {player_id}) dropped on {drop_date}')
+
+            for date in dates_to_check:
+                try:
+                    # find the next game date for this player after the drop date
+                    df_stats = pd.read_csv(f'{self.current_directory}/merged_daily_data/{self.year}/{self.year}_merged_yahoo_hr_{date}.csv')
+                except:
+                    print(f'No games found for player {player_name} at drop date {date}.')
+                    # iterate to the next game
+                    continue
+                df_player_games = df_stats[df_stats['PLAYER_ID']==player_id]
+                if len(df_player_games)==0:
+                    print(f'{player_name} not found in HR file {date}.')
+                    continue
+
+                print(f'Next game for player {player_name} is on {date}. Performance:')
+                print(player_name[['G','A','PTS','PPP','SHP','S','+/-','PIM']].to_string(index=False))
+
+                continue
 
     def duckdb_test(self):
         con = duckdb.connect("mydata.duckdb")
