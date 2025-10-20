@@ -1462,7 +1462,9 @@ class YEAR_INSTANCE:
 
 
     def test_function(self):
-        con = duckdb.connect("sql_tables/fantasy_database.duckdb")
 
-        hurt_df = con.execute(f"SELECT * FROM all_roster_data where SEASON == {self.year} and INJURY_NOTE is not NULL").df()
-        print(f'Number of hurt players: {len(hurt_df)}')
+        # Let's try some z-score derivations
+
+
+        con = duckdb.connect("sql_tables/fantasy_database.duckdb")
+        player_df = con.execute(f"SELECT * FROM all_roster_data where SEASON == {self.year}").df()
