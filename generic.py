@@ -23,7 +23,7 @@ class YEAR_INSTANCE:
     Generic engine for running the code.
     """
 
-    def __init__(self, control_file, current_directory, year, processing_type, dates_to_check):
+    def __init__(self, control_file, current_directory, year, dates_to_check):
         self.control_file       = control_file
         self.year               = year
         self.stats_for_year     = self.control_file["Years"][str(self.year)]['scoring_categories']
@@ -409,6 +409,7 @@ class YEAR_INSTANCE:
                                          'player_id',
                                          'name',
                                          'draft_round',
+                                         'draft_pick',
                                          'faab_bid',
                                          'source',
                                          'source_key',
@@ -463,7 +464,7 @@ class YEAR_INSTANCE:
                 waiver_check = 'YES' if source_type == 'waivers' else 'NO'
                 df_trans.loc[len(df_trans)] = (self.year, trans_week, trans_time, trans_type,
                                                trans_id, trans_status, player_id,
-                                               player_name, '', faab_bid, source, source_key,
+                                               player_name, '','', faab_bid, source, source_key,
                                                destination, destination_key, waiver_check, '')
 
 
@@ -479,7 +480,7 @@ class YEAR_INSTANCE:
                 destination_type = trans.players[0].transaction_data.destination_type
                 df_trans.loc[len(df_trans)] = (self.year, trans_week, trans_time, trans_type,
                                                trans_id, trans_status, player_id,
-                                               player_name, '', '', source, source_key,
+                                               player_name, '','', '', source, source_key,
                                                destination, destination_key, waiver_check, '')
 
             elif trans_type == 'add/drop':
@@ -502,7 +503,7 @@ class YEAR_INSTANCE:
                 trans_type = 'add'
                 df_trans.loc[len(df_trans)] = (self.year, trans_week, trans_time, trans_type,
                                                trans_id, trans_status, player_id,
-                                               player_name, '', faab_bid, source, source_key,
+                                               player_name, '','', faab_bid, source, source_key,
                                                destination, destination_key, waiver_check, '')
 
                 # drop portion
@@ -520,7 +521,7 @@ class YEAR_INSTANCE:
                 trans_type = 'drop'
                 df_trans.loc[len(df_trans)] = (self.year, trans_week, trans_time, trans_type,
                                                trans_id, trans_status, player_id,
-                                               player_name, '', '', source, source_key,
+                                               player_name, '','', '', source, source_key,
                                                destination, destination_key, waiver_check, '')
 
             elif trans_type == 'trade':
@@ -552,7 +553,7 @@ class YEAR_INSTANCE:
                         waiver_check = 'NO'
                         df_trans.loc[len(df_trans)] = (self.year, trans_week, trans_time, trans_type,
                                                        trans_id, trans_status, player_id,
-                                                       player_name, draft_round, '', source, source_key,
+                                                       player_name, draft_round,'', '', source, source_key,
                                                        destination, destination_key, waiver_check, '')
 
                 if trans.players == None:
@@ -572,7 +573,7 @@ class YEAR_INSTANCE:
                     waiver_check = 'YES' if source_type == 'waivers' else 'NO'
                     df_trans.loc[len(df_trans)] = (self.year, trans_week, trans_time, trans_type,
                                                    trans_id, trans_status, player_id,
-                                                   player_name, '', '', source, source_key,
+                                                   player_name, '','', '', source, source_key,
                                                    destination, destination_key, waiver_check, '')
                 else:
                     for plr in range(0, len(trans.players)):
@@ -589,7 +590,7 @@ class YEAR_INSTANCE:
                         waiver_check = 'YES' if source_type == 'waivers' else 'NO'
                         df_trans.loc[len(df_trans)] = (self.year, trans_week, trans_time, trans_type,
                                                        trans_id, trans_status, player_id,
-                                                       player_name, '', '', source, source_key,
+                                                       player_name, '','', '', source, source_key,
                                                        destination, destination_key, waiver_check, '')
             else:  # this is commish -> i don't know what to do with these
                 trans_status = trans.status
@@ -629,8 +630,6 @@ class YEAR_INSTANCE:
 
             # Grab some additional draft metadata analytics
             draft_analytics = self.query.get_player_draft_analysis(player_key).clean_data_dict()
-            average_pick = draft_analytics['draft_analysis']['average_pick']
-            average_round = draft_analytics['draft_analysis']['average_round']
             time.sleep(0.5)
             draft_arr.append({
                 'season': self.year,
@@ -638,12 +637,11 @@ class YEAR_INSTANCE:
                 'transaction_date': draft_time,
                 'transaction_type': draft_type,
                 'transaction_id': draft_id,
+                'status':'successful',
                 'player_id': player_id,
                 'name': player_name,
                 'draft_round': pick_round,
                 'draft_pick': pick_number,
-                'average_round':average_round,
-                'average_pick':average_pick,
                 'source': source,
                 'source_key': source_key,
                 'destination': team_name,
@@ -653,7 +651,7 @@ class YEAR_INSTANCE:
                 'GM_Name_source': 'Free Agency'
 
             })
-            #print(draft_pick, draft_time, draft_type, pick_number, pick_round, player_id, team_key, player_name, gm_name, team_name, source_key, source, source, keeper_check)
+        #print(draft_pick, draft_time, draft_type, pick_number, pick_round, player_id, team_key, player_name, gm_name, team_name, source_key, source, source, keeper_check)
 
         # Create a DataFrame from the list of dictionaries
         self.df_draft = pd.DataFrame(draft_arr)
@@ -765,13 +763,8 @@ class YEAR_INSTANCE:
             for table_id in tables_dict.keys():
                 row_key = tables_dict[table_id]['row_key']
                 table = soup.find('table', id=table_id)
-                # if not table:
-                #     print('Not table!')
-                #     return
                 rows = table.find_all('tr')
-                # if not rows:
-                #     print('Not Rows!')
-                #     return
+
                 # Extract headers
                 header_row = rows[row_key]
                 headers = [h.get_text(strip=True) for h in header_row.find_all(['th', 'td']) if
@@ -838,6 +831,7 @@ class YEAR_INSTANCE:
 
             for url in url_list:
                 urlGame = f"https://www.hockey-reference.com/boxscores/{url}.html"
+                print(urlGame)
                 page = requests.get(urlGame)
                 if page.status_code == 429:
                     print(f"[Rundate: {time.ctime()}] Rate limit hit, exiting parser.")
@@ -845,7 +839,7 @@ class YEAR_INSTANCE:
                 soup = BeautifulSoup(page.content, "html.parser")
                 test = soup.find("div", id="inner_nav")
                 list_metadata = [x for x in list(test)[1].text.split("\n") if x.strip()]
-
+                print(list_metadata)
                 home_team = list_metadata[-1].split("Schedule/Results")[0].strip()
                 away_team = list_metadata[-2].split("Schedule/Results")[0].strip()
                 home_code = get_team_code(home_team)
@@ -1072,18 +1066,6 @@ class YEAR_INSTANCE:
             df_out.to_csv(f'{self.current_directory}/merged_daily_data/{self.year}/{self.year}_merged_yahoo_hr_{date}.csv',
                           index=False)
 
-    def super_stitcher(self):
-        print(f'[{time.ctime()}] Stitching together all fuzzy-merged data for year {self.year}')
-        df_total = pd.DataFrame()
-        for file in list(glob.glob('merged_daily_data/*.csv')):
-            df_out = pd.read_csv(file)
-            df_total = pd.concat([df_total, df_out])
-
-
-        df_total.to_csv(f'{self.current_directory}/yearly_summaries/{self.year}_ALLDATES.csv',
-                          index=False)
-
-
     def post_processor_matchup_matchups(self):
         # I want to use this to create a matchup dataframe containing each week's data
         # and also do a sanity check on the results relative to Yahoo's reported results
@@ -1136,7 +1118,6 @@ class YEAR_INSTANCE:
                     left_wings_avail = 2-  len(df_team_date[df_team_date['SELECTED_POSITION'] == 'LW'])
                     right_wings_avail =2- len(df_team_date[df_team_date['SELECTED_POSITION'] == 'RW'])
                     defencemen_avail = 4- len(df_team_date[df_team_date['SELECTED_POSITION'] == 'D'])
-                    goalies_avail = 2- len(df_team_date[df_team_date['SELECTED_POSITION'] == 'G'])
                     util_avail = 1- len(df_team_date[df_team_date['SELECTED_POSITION'] == 'Util'])
                     for player in df_team_date['PLAYER'].unique():
                         if df_team_date[(df_team_date['PLAYER'] == player)]['SELECTED_POSITION'].values[0] == 'BN':
@@ -1151,8 +1132,6 @@ class YEAR_INSTANCE:
                                     df_week_matchups.loc[(df_week_matchups['PLAYER'] == player) & (df_week_matchups['DATE'] == date), 'MISSED_START'] = 1
                                 elif pos == 'D' and (defencemen_avail > 0  or util_avail > 0):
                                     df_week_matchups.loc[(df_week_matchups['PLAYER'] == player) & (df_week_matchups['DATE'] == date), 'MISSED_START'] = 1
-                                elif pos == 'G' and (goalies_avail > 0):
-                                    df_week_matchups.loc[(df_week_matchups['PLAYER'] == player) & (df_week_matchups['DATE'] == date), 'MISSED_START'] = 1
                                 else:
                                     # No change - player couldn't be played, so it's all good. Already initialized to 0
                                     pass
@@ -1163,7 +1142,6 @@ class YEAR_INSTANCE:
             df_week_matchups_play = df_week_matchups_play[df_week_matchups_play['PLAYER']!=0]
             df_week_matchups_play['SKATER_COUNT'] = df_week_matchups_play['SELECTED_POSITION'].apply(lambda row: 1 if row in ['C','LW','RW','D','Util'] else 0)
             df_week_matchups_play['GOALIE_COUNT'] = df_week_matchups_play['SELECTED_POSITION'].apply(lambda row: 1 if row in ['G'] else 0)
-
 
             df_week_matchups_bench = df_week_matchups[df_week_matchups['PLAY_OR_BENCH'] == 'BENCH'].fillna(0)
             df_week_matchups_bench = df_week_matchups_bench[df_week_matchups_bench['PLAYER']!=0]
@@ -1362,51 +1340,129 @@ class YEAR_INSTANCE:
             os.makedirs(f'{self.current_directory}/matchup_summaries_by_week/{self.year}', exist_ok=True)
             df_week_summary.to_csv(f'{self.current_directory}/matchup_summaries_by_week/{self.year}/{self.year}_matchup_summary_week_{week}.csv', index=False)
 
+    #
+    #
+    # def duckdb_test(self):
+    #     con = duckdb.connect("mydata.duckdb")
+    #
+    #     # Create table from CSV and persist
+    #     con.execute("""
+    #         CREATE TABLE roster_data AS
+    #         SELECT *
+    #         FROM read_csv_auto('team_rosters_by_date/*.csv')
+    #     """)
+    #
+    #     # Now it's stored inside mydata.duckdb
+    #     df = con.execute("SELECT COUNT(*) FROM roster_data").df()
+    #
+    #     print(df.head())
 
-    ########################################################################################
-    def next_game_how_you_do(self):
-        # for every drop, check the player's next game and see how well they did
-        print(f'[{time.ctime()}] Analyzing next-game performance for dropped players in year {self.year}')
-        df_trans = pd.read_csv(f'{self.current_directory}/league_transactions/{self.year}_transactions.csv')
-        df_drops = df_trans[df_trans['TRANSACTION_TYPE']=='drop']
-        all_dates = pd.read_csv(f'{self.current_directory}/league_weeks_and_dates/{self.year}_league_weeks_and_dates.csv')['date'].unique()
-        for player, i in df_drops.iterrows():
-            player_id = i['PLAYER_ID']
-            player_name = i['NAME']
-            drop_date = i['TRANSACTION_DATE'].split(' ')[0]
-            dates_to_check = [x for x in all_dates if x >= drop_date]
-            dates_to_check = dates_to_check[:7]  # only check the next 7 days
-            print(f'Analyzing next game for dropped player {player_name} (ID: {player_id}) dropped on {drop_date}')
+    # Let's start porting over some of the old functions from the previous pipeline here for easier access
+    def super_stitcher(self):
+        print(f'[{time.ctime()}] Stitching together all fuzzy-merged data for year {self.year}')
+        df_total = pd.DataFrame()
+        for file in list(glob.glob('merged_daily_data/**/*.csv',recursive=True)):
+            df_out = pd.read_csv(file)
+            df_total = pd.concat([df_total, df_out])
 
-            for date in dates_to_check:
-                try:
-                    # find the next game date for this player after the drop date
-                    df_stats = pd.read_csv(f'{self.current_directory}/merged_daily_data/{self.year}/{self.year}_merged_yahoo_hr_{date}.csv')
-                except:
-                    print(f'No games found for player {player_name} at drop date {date}.')
-                    # iterate to the next game
-                    continue
-                df_player_games = df_stats[df_stats['PLAYER_ID']==player_id]
-                if len(df_player_games)==0:
-                    print(f'{player_name} not found in HR file {date}.')
-                    continue
+        df_total.to_csv(f'{self.current_directory}/yearly_summaries/ALL_DATES_DATA.csv',index=False)
+        con = duckdb.connect("sql_tables/fantasy_database.duckdb")
 
-                print(f'Next game for player {player_name} is on {date}. Performance:')
-                print(player_name[['G','A','PTS','PPP','SHP','S','+/-','PIM']].to_string(index=False))
-
-                continue
-
-    def duckdb_test(self):
-        con = duckdb.connect("mydata.duckdb")
-
+    def sql_table_creator(self):
+        print(f'[{time.ctime()}] Creating DuckDB table from all fuzzy-merged data for year {self.year}')
         # Create table from CSV and persist
+        con = duckdb.connect("sql_tables/fantasy_database.duckdb")
+
+        # Create the roster tables
         con.execute("""
-            CREATE TABLE roster_data AS
+            CREATE OR REPLACE TABLE all_roster_data AS
             SELECT *
-            FROM read_csv_auto('team_rosters_by_date/*.csv')
+            FROM read_csv_auto('merged_daily_data/**/*.csv')
         """)
 
-        # Now it's stored inside mydata.duckdb
-        df = con.execute("SELECT COUNT(*) FROM roster_data").df()
+        # create the transaction tables
+        con.execute("""
+            CREATE OR REPLACE TABLE all_transaction_data AS
+            SELECT *
+            FROM read_csv_auto('league_transactions/**/*.csv')
+        """)
 
-        print(df.head())
+        # create the draft tables
+        con.execute("""
+            CREATE OR REPLACE TABLE all_draft_data AS
+            SELECT *
+            FROM read_csv_auto('league_drafts/**/*.csv')
+        """)
+
+        con.close()
+
+
+
+
+
+    def loyalty_analytics(self):
+
+        con = duckdb.connect("sql_tables/fantasy_database.duckdb")
+        trans_df = con.execute(f"SELECT * FROM all_transaction_data where SEASON == {self.year}").df()
+        draft_df = con.execute(f"SELECT * FROM all_draft_data where SEASON == {self.year}").df()
+
+        for gm_key in draft_df['DESTINATION_KEY'].unique():
+            # Let's look for keepers for this GM
+            gm_draft = draft_df[(draft_df['DESTINATION_KEY']==gm_key)]
+            gm_name = gm_draft['GM_NAME_DESTINATION'].values[0]
+            count_keepers = len(gm_draft[gm_draft['KEEPER']=='KEEPER'])
+            keeper_loyalty = count_keepers
+            count_draftees = len(gm_draft[gm_draft['KEEPER']=='NO'])
+            draft_loyalty = count_draftees
+
+            loyalty_score = (draft_loyalty+keeper_loyalty)/(count_keepers+count_draftees)
+            for keeper in gm_draft[(gm_draft['KEEPER']=='KEEPER')]['NAME']:
+                # Look to see if this player was ever dropped in the transactions list
+                # If so, subtract one from the keeper loyalty score
+                if len(trans_df[(trans_df['NAME']==keeper)&(trans_df['SOURCE_KEY']==gm_key)&(trans_df['TRANSACTION_TYPE']=='drop')])>0:
+                    keeper_loyalty = keeper_loyalty-1
+                    loyalty_score = (draft_loyalty + keeper_loyalty) / (count_keepers + count_draftees)
+                    print(f'{gm_name} dropped keeper {keeper}, thus lowering loyalty_score to {loyalty_score} ')
+
+
+            for draftee in gm_draft[(gm_draft['KEEPER']=='NO')]['NAME']:
+                # Look to see if this player was ever dropped in the transactions list
+                if len(trans_df[(trans_df['NAME']==draftee)&(trans_df['SOURCE_KEY']==gm_key)&(trans_df['TRANSACTION_TYPE']=='drop')])>0:
+                    draft_loyalty = draft_loyalty-1
+                    loyalty_score = (draft_loyalty + keeper_loyalty) / (count_keepers + count_draftees)
+                    print(f'{gm_name} dropped draftee {draftee}, thus lowering loyalty_score to {loyalty_score} ')
+
+            # todo: Make an outputer for this
+        con.close()
+
+    def hospital_analytics(self):
+        con = duckdb.connect("sql_tables/fantasy_database.duckdb")
+
+        hurt_df = con.execute(f"SELECT * FROM all_roster_data where SEASON == {self.year} and INJURY_NOTE is not NULL").df()
+        print(f'Number of hurt players: {len(hurt_df)}')
+        for patient in hurt_df['NAME'].unique():
+            player_df = hurt_df[hurt_df['NAME']==patient]
+            # we want to derive the "trips" to the hospital per player (ie, consecutive days are one trip)
+            # for each trip, what was the reason
+            # how many trips per player
+            # how many players per gm, and thus how many trips
+
+            total_days = len(player_df)
+            player_df['DATE'] = pd.to_datetime(player_df['DATE'])
+            player_df.sort_values('DATE',inplace=True)
+            player_df['DATE_GROUP'] = (player_df['DATE'].diff().dt.days.ne(1)).cumsum()
+            for group_count in player_df['DATE_GROUP'].unique():
+                player_group_df = player_df[player_df['DATE_GROUP']==group_count]
+                group_start = player_group_df['DATE'].min()
+                group_end = player_group_df['DATE'].max()
+                injury = player_group_df['INJURY_NOTE'].iloc[0]
+                time_in_group = len(player_group_df)
+                print(f'{patient} was in the hospital from {group_start} to {group_end} ({time_in_group} days) with a(n) {injury} issue')
+        # todo: this kind of works; there is a problem with the datagaps causing an issue with the grouping.. but at least everyting parses correctly
+
+
+    def test_function(self):
+        con = duckdb.connect("sql_tables/fantasy_database.duckdb")
+
+        hurt_df = con.execute(f"SELECT * FROM all_roster_data where SEASON == {self.year} and INJURY_NOTE is not NULL").df()
+        print(f'Number of hurt players: {len(hurt_df)}')
