@@ -46,22 +46,28 @@ print(f'Today: {today} >><< Yesterday: {yesterday}')
 # ==============================
 # OPERATION MODE SELECTION
 # ==============================
-operation_mode = args.mode or input('Enter the operation mode (1 for Year-based/manual, 2 for latest-live, 3 for custom): ')
+operation_mode = args.mode or input('Enter the operation mode (1 for Year-based/manual, 2 for latest-live, 3 for weekly): ')
 
 if operation_mode == '1':
     year = args.year or input('Enter the year you want to reprocess (YYYY): ')
-    processing_type = 'REPROCESS'
 
 elif operation_mode == '2':
+    # Daily operation
     year = int(max(years_enabled))
     print(f'Processing the latest live data for year(s): {year}')
-    processing_type = 'LIVE'
     dates_to_check = [str(yesterday)]
 
 elif operation_mode == '3':
-    year = 2024
-    dates_to_check = ['2024-10-22']
-    processing_type = 'CUSTOM'
+    # weekly operation to grab HR data and run the
+    year = int(max(years_enabled))
+    week = input('Weekly operation - which week do you want to run?')
+    df_weeks = pd.read_csv(f'{current_directory}/league_weeks_and_dates/{year}_league_weeks_and_dates.csv')
+    if week not in df_weeks['week'].astype(str).unique():
+        print(f'Invalid week: {week}. Available weeks: {df_weeks["week"].astype(str).unique()}')
+        exit()
+    dates_to_check = df_weeks[df_weeks['week'].astype(str) == week]['date'].tolist()
+    print(f'Processing week {week} for year {year} on dates: {dates_to_check}')
+    # For CUSTOM mode, we can hardcode specific dates if
 
 else:
     print('Incorrect operation mode. Please enter 1, 2, or 3 next time.')
@@ -104,19 +110,26 @@ print(f'Processing Year: {year}')
 # ==============================
 # MAIN PROCESSING OBJECT
 # ==============================
-yahoo_api_instance = YEAR_INSTANCE(control_file, current_directory, year, processing_type, dates_to_check)
+yahoo_api_instance = YEAR_INSTANCE(control_file, current_directory, year, dates_to_check)
 
 # ==============================
 # AUTOMATION / INTERACTIVE MODES
 # ==============================
 if operation_mode == '2':
     # === LIVE MODE: automatic standard pipeline ===
-    print("Running LIVE mode — executing transactions, rosters, and HR parsing.")
+    print("Running LIVE mode — executing yahoo time-senstive parsing.")
     yahoo_api_instance.extract_yahoo_transactions()
     yahoo_api_instance.extract_yahoo_rosters()
+    print("✅ Live data processing complete.")
+
+if operation_mode == '3':
+    # === WEEKLY MODE: automatic standard pipeline ===
+    print("Running WEEKLY mode — executing HR Parsing, stitching, and weekly analytics.")
+    yahoo_api_instance.NHL_schedule_parser()
     yahoo_api_instance.parse_HR_data()
     yahoo_api_instance.fuzzy_outer_merge_hr()
-    print("✅ Live data processing complete.")
+    yahoo_api_instance.post_processor_matchup_matchups()
+    print("✅ Weekly data processing complete.")
 
 elif operation_mode == '1':
     # === MANUAL MODE: pick which methods to run ===
@@ -129,8 +142,9 @@ elif operation_mode == '1':
         '6': ('fuzzy_outer_merge_hr', yahoo_api_instance.fuzzy_outer_merge_hr),
         '7': ('super_stitcher', yahoo_api_instance.super_stitcher),
         '8': ('post_processor_matchup_matchups', yahoo_api_instance.post_processor_matchup_matchups),
-        '9': ('duckdb_test', yahoo_api_instance.duckdb_test),
-        '10': ('next_game_how_you_do', yahoo_api_instance.next_game_how_you_do)
+        '9': ('sql_table_creator', yahoo_api_instance.sql_table_creator),
+        '10': ('test_function', yahoo_api_instance.test_function),
+
     }
 
     print("\nAvailable methods to run:")
@@ -153,12 +167,5 @@ elif operation_mode == '1':
                 print(tb_str)
         else:
             print(f"Skipping invalid selection: {s}")
-
-elif operation_mode == '3':
-    # === CUSTOM TEST MODE ===
-    print("Running CUSTOM mode.")
-    yahoo_api_instance.extract_yahoo_rosters()
-    yahoo_api_instance.parse_HR_data()
-    yahoo_api_instance.fuzzy_outer_merge_hr()
 
 print("\n🎯 Script completed successfully.")
