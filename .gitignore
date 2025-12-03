@@ -28,3 +28,4 @@ merged_daily_data/
 debug_files/
 venv/
 sql_tables/
+team_stats_by_date/

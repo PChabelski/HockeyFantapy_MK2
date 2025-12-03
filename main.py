@@ -120,6 +120,7 @@ if operation_mode == '2':
     print("Running LIVE mode — executing yahoo time-senstive parsing.")
     yahoo_api_instance.extract_yahoo_transactions()
     yahoo_api_instance.extract_yahoo_rosters()
+    yahoo_api_instance.extract_yahoo_stats()
     print("✅ Live data processing complete.")
 
 if operation_mode == '3':
@@ -140,11 +141,12 @@ elif operation_mode == '1':
         '4': ('extract_yahoo_rosters', yahoo_api_instance.extract_yahoo_rosters),
         '5': ('parse_HR_data', yahoo_api_instance.parse_HR_data),
         '6': ('fuzzy_outer_merge_hr', yahoo_api_instance.fuzzy_outer_merge_hr),
-        '7': ('super_stitcher', yahoo_api_instance.super_stitcher),
+        '7': ('merge_yahoo_stats_and_rosters', yahoo_api_instance.merge_yahoo_stats_and_rosters),
         '8': ('post_processor_matchup_matchups', yahoo_api_instance.post_processor_matchup_matchups),
         '9': ('sql_table_creator', yahoo_api_instance.sql_table_creator),
         '10': ('test_function', yahoo_api_instance.test_function),
-
+        '11': ('rag_test', yahoo_api_instance.rag_test),
+        '12':('yahoo_stats',yahoo_api_instance.extract_yahoo_stats)
     }
 
     print("\nAvailable methods to run:")

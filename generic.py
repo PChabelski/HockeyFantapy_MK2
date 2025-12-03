@@ -14,6 +14,9 @@ import os
 import time
 import glob
 import duckdb
+from difflib import get_close_matches
+from openai import OpenAI
+import json
 
 pd.options.display.float_format = '{:,}'.format
 pd.set_option('mode.chained_assignment', None)
@@ -726,6 +729,62 @@ class YEAR_INSTANCE:
             date_df.to_csv(output_file, index=False)
             time.sleep(10)  # Sleep for 10 seconds to avoid API rate limits
 
+    def extract_yahoo_stats(self):
+        print(f'[{time.ctime()}] Getting yahoo team roster stat info for year {self.year}')
+        df_league_weeks_and_dates = pd.read_csv(f'{self.current_directory}/league_weeks_and_dates/{self.year}_league_weeks_and_dates.csv')
+        df_teams = pd.read_csv(f'{self.current_directory}/league_teams/{self.year}_league_teams.csv')
+        df_stat_codes = pd.read_csv(f'{self.current_directory}/league_stat_categories/{self.year}_league_stat_categories.csv')
+        # Cycle through each date in the league weeks and dates DataFrame
+        # and get the roster for each team on that date
+        for date in self.dates_to_check:
+            iter_date = date
+            print(f'[{time.ctime()}] Processing date: {iter_date}')
+            date_arr = []
+            df_roster_stats_date = pd.DataFrame()
+            # Get the teams for this date
+            for team_code in df_teams['team_id'].unique():
+                # Get the roster for this team on this date
+                roster = self.query.get_team_roster_player_info_by_date(team_id=team_code, chosen_date=iter_date)
+                if not roster:
+                    print(f'No roster found for team {team_code} on date {iter_date}')
+                    continue
+                # Process the roster and save it to a file or database
+                # lets create a DataFrame to store the roster data into a csv
+                for player in roster:
+                    player_daily_metadata = player.clean_data_dict()
+                    player_metadata_dict = {}
+                    # extract the relevant data from the player_data dictionary
+                    # there is a lot of metadata in addition to the stats, so we might split these off eventually
+                    player_metadata_dict={
+                        'SEASON': self.year,
+                        'NAME': player_daily_metadata.get('name', {}).get('full', 'Unknown Player'),
+                        'PLAYER_ID': player_daily_metadata.get('player_id', 0),
+                        'PLAYER_KEY': player_daily_metadata.get('player_key', '?')
+                    }
+                    stat_array = player_daily_metadata.get('player_stats', {}).get('stats', {})
+                    for i in range(0,len(stat_array)):
+                        stat_block = stat_array[i]['stat'].clean_data_dict()
+                        stat_id = stat_block['stat_id']
+                        stat_value = stat_block['value']
+                        stat_name = df_stat_codes[df_stat_codes['stat_id']==stat_id]['display_name'].values[0]
+                        player_metadata_dict.update({stat_name: stat_value})
+
+                    # No need for stats, I will grab them from the fine folks at hockeyreference
+                    # # Loop through and grab the stats for this player
+                    # convert the player_metadata_and_stats_arr to a DataFrame
+                    date_arr.append(player_metadata_dict)
+
+            date_df = pd.DataFrame(date_arr)
+            date_df = self.identical_names_handler(date_df, 'yahoo') if len(date_df) > 0 else date_df
+            output_dir = f'{self.current_directory}/team_stats_by_date/{self.year}'
+            os.makedirs(output_dir, exist_ok=True)
+            # Save the DataFrame to a CSV file
+            output_file = f"{output_dir}/{self.year}_stats_{iter_date}.csv"
+            date_df['DATE'] = iter_date
+            date_df.to_csv(output_file, index=False)
+            time.sleep(10)  # Sleep for 10 seconds to avoid API rate limits
+
+
     def parse_HR_data(self):
         import os
         import time
@@ -1066,6 +1125,16 @@ class YEAR_INSTANCE:
             df_out.to_csv(f'{self.current_directory}/merged_daily_data/{self.year}/{self.year}_merged_yahoo_hr_{date}.csv',
                           index=False)
 
+    def merge_yahoo_stats_and_rosters(self):
+        for date in self.dates_to_check:
+            ########################
+            df_yahoo_roster = pd.read_csv(f'{self.current_directory}/team_rosters_by_date/{self.year}/{self.year}_rosters_{date}.csv')
+            df_yahoo_stats = pd.read_csv(f'{self.current_directory}/team_stats_by_date/{self.year}/{self.year}_stats_{date}.csv')
+            df_out = df_yahoo_roster.merge(df_yahoo_stats,how='left',on='PLAYER_KEY')
+            os.makedirs(f'{self.current_directory}/merged_yahoo_data/{self.year}', exist_ok=True)
+            df_out.to_csv(f'{self.current_directory}/merged_yahoo_data/{self.year}/{self.year}_merged_yahoo_{date}.csv',
+                          index=False)
+
     def post_processor_matchup_matchups(self):
         # I want to use this to create a matchup dataframe containing each week's data
         # and also do a sanity check on the results relative to Yahoo's reported results
@@ -1255,11 +1324,11 @@ class YEAR_INSTANCE:
 
             # Initialize score column
             df_week_summary['CALC_SCORE'] = 0
+            df_week_summary['CLOSENESS_SCORE'] = 0
             df_week_summary_play = df_week_summary[df_week_summary['PLAY_OR_BENCH']=='PLAY']
             df_week_summary_bench = df_week_summary[df_week_summary['PLAY_OR_BENCH']=='BENCH']
 
-
-            # Process each matchup separately
+            # Process each matchup separately to get the Calculated Yahoo Score, ROTO score, closeness score, etc.
             for matchup_val, group in df_week_summary_play.groupby("MATCHUP_ID", sort=False):
                 # Use reset_index to avoid issues with duplicate indices
                 group_reset = group.reset_index()
@@ -1286,12 +1355,13 @@ class YEAR_INSTANCE:
                     df_week_summary_play[col + '_RANK'] = df_week_summary_play[col].rank(ascending=False,pct=True).round(2)
                 else:
                     df_week_summary_play[col + '_RANK'] = df_week_summary_play[col].rank(ascending=True,pct=True).round(2)
+
+
             df_week_summary_play['ROTO_SCORE'] = df_week_summary_play[[col + '_RANK' for col in cols_of_interest]].sum(axis=1)
 
             # Check if there are any goalie failures (i.e. no goalie played in the week)
 
             df_week_summary = pd.concat([df_week_summary_bench,df_week_summary_play])
-
 
             # Finally, let's do a sanity check on the CALC_SCORE and SCORE columns to see where the deltas are
             for i in range(0,len(df_week_summary_play)):
@@ -1339,23 +1409,6 @@ class YEAR_INSTANCE:
             ]]
             os.makedirs(f'{self.current_directory}/matchup_summaries_by_week/{self.year}', exist_ok=True)
             df_week_summary.to_csv(f'{self.current_directory}/matchup_summaries_by_week/{self.year}/{self.year}_matchup_summary_week_{week}.csv', index=False)
-
-    #
-    #
-    # def duckdb_test(self):
-    #     con = duckdb.connect("mydata.duckdb")
-    #
-    #     # Create table from CSV and persist
-    #     con.execute("""
-    #         CREATE TABLE roster_data AS
-    #         SELECT *
-    #         FROM read_csv_auto('team_rosters_by_date/*.csv')
-    #     """)
-    #
-    #     # Now it's stored inside mydata.duckdb
-    #     df = con.execute("SELECT COUNT(*) FROM roster_data").df()
-    #
-    #     print(df.head())
 
     # Let's start porting over some of the old functions from the previous pipeline here for easier access
     def super_stitcher(self):
@@ -1459,12 +1512,210 @@ class YEAR_INSTANCE:
                 time_in_group = len(player_group_df)
                 print(f'{patient} was in the hospital from {group_start} to {group_end} ({time_in_group} days) with a(n) {injury} issue')
         # todo: this kind of works; there is a problem with the datagaps causing an issue with the grouping.. but at least everyting parses correctly
+        # todo: I can probably fix this by adding some kind of "NHL Game Day #" column and using that instead of date
 
 
     def test_function(self):
-
-        # Let's try some z-score derivations
-
-
         con = duckdb.connect("sql_tables/fantasy_database.duckdb")
-        player_df = con.execute(f"SELECT * FROM all_roster_data where SEASON == {self.year}").df()
+
+        roster_df = con.execute(f"SELECT * FROM all_roster_data where SEASON == {self.year}").df()
+        roster_df['GP'] = 1
+        roster_df['TOI'] = roster_df['TOI'].apply(lambda x: float(x.split(':')[0]) + float(x.split(':')[1]) / 60 if isinstance(x, str) and ':' in x else 0)
+        roster_df['GTOI'] = roster_df.apply(lambda x: x['TOI'] if x['SA']>0 else 0 ,axis=1)
+        roster_df['TOI'] = roster_df.apply(lambda x: 0 if x['SA']>0 else x['TOI'] ,axis=1)
+
+        df_player_stats_sum = roster_df.groupby(
+            ['PLAYER']).agg({
+            "GP":"sum",
+            "G": "sum",
+            "A": "sum",
+            "+/-": "sum",
+            "PIM": "sum",
+            "PPP": "sum",
+            "SHP": "sum",
+            "S": "sum",
+            "GW": "sum",
+            "HIT": "sum",
+            "BLK": "sum",
+            "WIN": "sum",
+            "LOSS": "sum",
+            "SV": "sum",
+            "GA": "sum",
+            "SA": "sum",
+            "SO": "sum",
+            "TOI": "sum",
+            "GTOI": "sum",
+            "WIN":"sum",
+            "LOSS": "sum",
+        }).reset_index()
+
+        df_player_stats_sum['S%'] = round(df_player_stats_sum['G'] / df_player_stats_sum['S'].replace(0, np.nan), 3)
+        df_player_stats_sum['SV%'] = round(df_player_stats_sum['SV'] / df_player_stats_sum['SA'].replace(0, np.nan),3)
+        df_player_stats_sum['GAA'] = round((df_player_stats_sum['GA'] * 60) / df_player_stats_sum['GTOI'].replace(0, np.nan), 2)
+        #df_player_stats_sum.to_csv('test_out.csv')
+
+        #todo: ok this works - just need to implement some z-scoring and some fantasy scoring
+        columns_to_ignore = ['PLAYER','GP','TOI','GTOI']
+        for column in df_player_stats_sum.columns:
+            if column in columns_to_ignore:
+                continue
+            else:
+                mean_values = df_player_stats_sum[column].mean()
+                std_values = df_player_stats_sum[column].std()
+
+                # Calculate the Z-score for each value and add it as a new column
+                df_player_stats_sum[f'{column}_Z_SCORE'] = (df_player_stats_sum[column] - mean_values) / std_values
+
+        df_player_stats_sum.to_csv('test_out.csv')
+
+
+
+
+###################################################
+
+
+    def rag_test(self):
+        """
+        Run a GPT-assisted query against the DuckDB database linked to this instance.
+        Uses self.db_path and self.key_file.
+        """
+
+        import re
+        import json
+        import time
+        from difflib import get_close_matches
+        from openai import OpenAI
+        import duckdb
+
+        print("🔹 Running rag_test()...")
+
+        # -------------------
+        # 🔑 Setup
+        # -------------------
+        client = OpenAI(api_key=self.key_file["OPEN_AI_API_KEY"])
+        con = duckdb.connect(self.db_path)
+
+        # -------------------
+        # 🧠 Helper functions
+        # -------------------
+        def get_schema_map():
+            """Return {table_name: [col1, col2, ...]}"""
+            tables = [row[0] for row in con.sql("SHOW TABLES").fetchall()]
+            schema = {}
+            for t in tables:
+                df = con.sql(f"DESCRIBE {t}").fetchdf()
+                schema[t] = [c for c in df["column_name"].tolist()]
+            return schema
+
+        def schema_text_for_prompt(schema_map):
+            """Return schema as readable text."""
+            lines = []
+            for t in sorted(schema_map.keys()):
+                lines.append(f"Table: {t}")
+                for c in schema_map[t]:
+                    lines.append(f"  - {c}")
+                lines.append("")
+            return "\n".join(lines)
+
+        def extract_qualified_identifiers(sql):
+            """Find tokens like table.col or alias.col."""
+            return re.findall(r"\b([A-Za-z_][\w]*)\.([A-Za-z_][\w]*)\b", sql)
+
+        def validate_sql_against_schema(sql, schema_map):
+            """Return (is_valid, invalid_columns)"""
+            qualified = extract_qualified_identifiers(sql)
+            invalid = []
+            for table_or_alias, col in qualified:
+                if table_or_alias in schema_map:
+                    if col not in schema_map[table_or_alias]:
+                        invalid.append((table_or_alias, col))
+                else:
+                    invalid.append((table_or_alias, col))
+            return len(invalid) == 0, invalid
+
+        def ask_model_for_sql(question, schema_map, model="gpt-5", max_retries=3):
+            """Generate validated SQL via GPT with retries"""
+            schema_text = schema_text_for_prompt(schema_map)
+            system = (
+                "You are a precise SQL generator for DuckDB. "
+                "Return a single JSON object and nothing else, exactly in this format: "
+                '{"sql":"SELECT ..."} .'
+            )
+
+            user = (
+                "Here is the database schema. Use only these tables and columns. "
+                "Do not invent or rename anything. Do not use aliases — use full table names.\n\n"
+                f"{schema_text}\n\nQuestion: {question}\n\n"
+                'Return only JSON: {"sql":"..."}'
+            )
+
+            for attempt in range(1, max_retries + 1):
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    temperature=0.0,
+                )
+
+                raw = resp.choices[0].message.content.strip()
+                jmatch = re.search(r"(\{.*\})", raw, re.DOTALL)
+                if not jmatch:
+                    user = (
+                        "Your previous response was invalid. "
+                        "Return exactly one JSON object with key 'sql'. "
+                        f"Question: {question}"
+                    )
+                    continue
+
+                try:
+                    js = json.loads(jmatch.group(1))
+                    sql = js.get("sql", "").strip()
+                except json.JSONDecodeError:
+                    continue
+
+                sql = re.sub(r"^```sql\s*|```$", "", sql, flags=re.IGNORECASE).strip()
+
+                valid, invalid = validate_sql_against_schema(sql, schema_map)
+                if valid:
+                    return sql
+                else:
+                    fixes = []
+                    for qual, col in invalid:
+                        if qual in schema_map:
+                            suggestions = get_close_matches(col, schema_map[qual], n=3)
+                            fixes.append(f"- `{col}` not in `{qual}`; try {suggestions}")
+                        else:
+                            fixes.append(f"- Qualifier `{qual}` not found; avoid aliases.")
+                    feedback = (
+                        "Invalid column references found:\n"
+                        + "\n".join(fixes)
+                        + "\n\nPlease correct the SQL and return only JSON."
+                    )
+                    user = feedback + "\n\n" + f"{schema_text}\n\nQuestion: {question}"
+                    time.sleep(1)
+                    continue
+
+            raise RuntimeError("Failed to get valid SQL after retries.")
+
+        # -------------------
+        # 🚀 Main process
+        # -------------------
+        schema_map = get_schema_map()
+
+        # Ask for user question dynamically at runtime (can also come from elsewhere in class)
+        question = input("\nInput your question here - end with '?': ").strip()
+
+        print(f"\n🔹 Question: {question}")
+        sql = ask_model_for_sql(question, schema_map)
+        print("\n✅ Final SQL to execute:\n", sql)
+
+        try:
+            df = con.execute(sql).fetchdf()
+            print("\n📊 Query Results:")
+            print(df)
+            return df
+        except Exception as e:
+            print("❌ Error executing SQL:", e)
+            raise
