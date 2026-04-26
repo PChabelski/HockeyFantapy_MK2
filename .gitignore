@@ -10,6 +10,8 @@ league_metadata/
 league_teams/
 league_standings/
 season_schedules/
+merged_extracts_years/
+merged_extracts/
 player_metadata/
 league_weeks_and_dates/
 league_stat_categories/
@@ -20,12 +22,41 @@ team_rosters_by_date/
 fuzzy_merged_yahoo_nst/
 league_transactions/
 fuzzy_merged_yahoo_hr/
-hr_data/
+hr_data_extract/
 manual_data/
 matchup_summaries_by_week/
 yearly_summaries/
 merged_daily_data/
-debug_files/
+debug/
+csv_databases/
+chroma_store/
+analytics_draft/
+analytics_keepers/
+analytics_matchups/
+analytics_engagement/
+analytics_faab/
+analytics_hospital/
+analytics_loyalty/
+analytics_streamers/
+analytics_power_ranks/
 venv/
 sql_tables/
 team_stats_by_date/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Data files — don't push CSVs to GitHub
+*.csv
+*.xlsx
+merged_extracts_years/
+chroma_store/
+
+# Secrets
+.env
+*.key
+
+# PyCharm
+.idea/
