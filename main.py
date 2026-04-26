@@ -46,7 +46,7 @@ print(f'Today: {today} >><< Yesterday: {yesterday}')
 # ==============================
 # OPERATION MODE SELECTION
 # ==============================
-operation_mode = args.mode or input('Enter the operation mode (1 for Year-based/manual, 2 for latest-live, 3 for weekly): ')
+operation_mode = args.mode or input('Enter the operation mode (1 for Year-based/manual, 2 for latest-live): ')
 
 if operation_mode == '1':
     year = args.year or input('Enter the year you want to reprocess (YYYY): ')
@@ -57,18 +57,6 @@ elif operation_mode == '2':
     print(f'Processing the latest live data for year(s): {year}')
     dates_to_check = [str(yesterday)]
 
-elif operation_mode == '3':
-    # weekly operation to grab HR data and run the
-    year = int(max(years_enabled))
-    week = input('Weekly operation - which week do you want to run?')
-    df_weeks = pd.read_csv(f'{current_directory}/league_weeks_and_dates/{year}_league_weeks_and_dates.csv')
-    if week not in df_weeks['week'].astype(str).unique():
-        print(f'Invalid week: {week}. Available weeks: {df_weeks["week"].astype(str).unique()}')
-        exit()
-    dates_to_check = df_weeks[df_weeks['week'].astype(str) == week]['date'].tolist()
-    print(f'Processing week {week} for year {year} on dates: {dates_to_check}')
-    # For CUSTOM mode, we can hardcode specific dates if
-
 else:
     print('Incorrect operation mode. Please enter 1, 2, or 3 next time.')
     exit()
@@ -76,7 +64,7 @@ else:
 # ==============================
 # DATE SELECTION LOGIC
 # ==============================
-if operation_mode not in ['2', '3']:
+if operation_mode not in ['2']:
     if args.dates:
         dates_to_check = args.dates.strip().split(',')
     else:
@@ -99,7 +87,12 @@ if operation_mode not in ['2', '3']:
             f'{current_directory}/league_weeks_and_dates/{year}_league_weeks_and_dates.csv'
         )['date'].unique()
         dates_to_check = [x for x in all_dates if x >= onward_date]
-
+    elif dates_to_check == ['YESTERDAY']:
+        print('Grabbing dates from start to yesterday...')
+        all_dates = pd.read_csv(
+            f'{current_directory}/league_weeks_and_dates/{year}_league_weeks_and_dates.csv'
+        )['date'].unique()
+        dates_to_check = [x for x in all_dates if x <= yesterday]
     else:
         print('Grabbing specific dates...')
         dates_to_check = [x.strip() for x in dates_to_check if x.strip()]
@@ -118,18 +111,13 @@ yahoo_api_instance = YEAR_INSTANCE(control_file, current_directory, year, dates_
 if operation_mode == '2':
     # === LIVE MODE: automatic standard pipeline ===
     print("Running LIVE mode — executing yahoo time-senstive parsing.")
+    yahoo_api_instance.NHL_schedule_parser()
     yahoo_api_instance.extract_yahoo_transactions()
     yahoo_api_instance.extract_yahoo_rosters()
-    print("✅ Live data processing complete.")
-
-if operation_mode == '3':
-    # === WEEKLY MODE: automatic standard pipeline ===
-    print("Running WEEKLY mode — executing HR Parsing, stitching, and weekly analytics.")
-    yahoo_api_instance.NHL_schedule_parser()
     yahoo_api_instance.parse_HR_data()
-    yahoo_api_instance.fuzzy_outer_merge_hr()
-    yahoo_api_instance.post_processor_matchup_matchups()
-    print("✅ Weekly data processing complete.")
+    yahoo_api_instance.mapping_hr_to_yh_names()
+    print("✅ Live online data processing complete.")
+
 
 elif operation_mode == '1':
     # === MANUAL MODE: pick which methods to run ===
@@ -139,13 +127,9 @@ elif operation_mode == '1':
         '3': ('extract_yahoo_transactions', yahoo_api_instance.extract_yahoo_transactions),
         '4': ('extract_yahoo_rosters', yahoo_api_instance.extract_yahoo_rosters),
         '5': ('parse_HR_data', yahoo_api_instance.parse_HR_data),
-        '6': ('fuzzy_outer_merge_hr', yahoo_api_instance.fuzzy_outer_merge_hr),
-        '7': ('super_stitcher', yahoo_api_instance.super_stitcher),
-        '8': ('post_processor_matchup_matchups', yahoo_api_instance.post_processor_matchup_matchups),
-        '9': ('sql_table_creator', yahoo_api_instance.sql_table_creator),
-        '10': ('test_function', yahoo_api_instance.test_function),
-
+        '11': ('mapping_hr_to_yh_names', yahoo_api_instance.mapping_hr_to_yh_names)
     }
+
 
     print("\nAvailable methods to run:")
     for k, v in available_methods.items():
