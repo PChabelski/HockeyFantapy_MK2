@@ -505,6 +505,7 @@ class ANALYTICS_ENGINE:
         print(f'RUNNING MATCHUP ANALYTICS FOR YEAR {self.year}')
         cf_year = self.control_file['Years'][str(self.year)]
         df_merged = pd.read_csv(f'merged_extracts_years/{self.year}_ALL_DATA.csv',low_memory=False)
+        df_weeks = pd.read_csv(f'league_weeks_and_dates/{self.year}_league_weeks_and_dates.csv',low_memory=False)
 
         # Rename columns to their canonical scoring category names
         df_merged.rename({'PTS': 'P', 'GOALSPP': 'PPG', 'ASSISTSPP': 'PPA', 'GOALSSH': 'SHG', 'ASSISTSSH': 'SHA',
@@ -711,9 +712,17 @@ class ANALYTICS_ENGINE:
                 team_a_total_score = 0
                 team_b_total_score = 0
 
+                closeness_score = 0
+
                 for category in cf_year['scoring_categories']:
                     team_a_result = df_matchup_results[category].iloc[0]
                     team_b_result = df_matchup_results[category].iloc[1]
+                    if category in ['W', 'L', 'G', 'A', 'PIM','SOG','PPP','BLK','HIT','SV']:
+                        delta = abs(team_a_result-team_b_result)
+                        closeness_score +=1 if delta==0 else 0.25 if delta <2 else 0
+                    if category in ['SV%']:
+                        delta = abs(team_a_result-team_b_result)
+                        closeness_score +=1 if delta==0 else 0.25 if delta <0.1 else 0
 
                     if category not in ['GAA', 'L']:
                         # Higher value wins the category
@@ -742,6 +751,8 @@ class ANALYTICS_ENGINE:
 
                 df_matchup_results.loc[0, 'CALCULATED_SCORE'] = int(team_a_total_score)
                 df_matchup_results.loc[1, 'CALCULATED_SCORE'] = int(team_b_total_score)
+                df_matchup_results.loc[0, 'CLOSENESS'] = closeness_score
+                df_matchup_results.loc[1, 'CLOSENESS'] = closeness_score
 
                 # Derive CALCULATED_RESULT from the category tally
                 if team_a_total_score > team_b_total_score:
@@ -827,10 +838,33 @@ class ANALYTICS_ENGINE:
                     # Lower-is-better categories: invert the percentile rank
                     df_week_results['WEEK_QS'] +=  df_week_results[category].rank(pct=True,ascending=False)
                 categories_count+=1
-            df_week_results['WEEK_QS']  = round(df_week_results['WEEK_QS']/categories_count*10,3)
+            df_week_results['WEEK_QS']  = round(df_week_results['WEEK_QS']/categories_count*15,3)
             df_week_results['WEEK_QS_RANK']=df_week_results['WEEK_QS'].rank()
-            df_year_matchup_results = pd.concat([df_year_matchup_results, df_week_results],
-                                                ignore_index=True)
+
+
+            # need to go through and find the opponents quality score
+            df_week_results['OPPONENT_QS'] = 0
+            df_week_results['MARGIN'] = 0
+            for week in df_week_results['WEEK'].unique():
+                for matchup in df_week_results[df_week_results['WEEK']==week]['MATCHUP']:
+                    df_week_results_matchup = df_week_results[(df_week_results['WEEK'] == week) & (df_week_results['MATCHUP'] == matchup)]
+                    for i in [0, 1]:
+                        opponent_qs = df_week_results_matchup['WEEK_QS'].iloc[-1*i + 1]
+                        df_week_results_matchup['OPPONENT_QS'].iloc[i] =opponent_qs
+
+                        opponent_score = df_week_results_matchup['SCORE'].iloc[-1*i + 1]
+                        gm_score = df_week_results_matchup['SCORE'].iloc[i]
+                        margin = gm_score-opponent_score
+                        df_week_results_matchup['MARGIN'].iloc[i] = margin
+
+
+
+                    df_year_matchup_results = pd.concat([df_year_matchup_results, df_week_results_matchup],
+                                                        ignore_index=True)
+
+
+
+
 
         # --- Yearly Quality Score (YEAR_QS) ---
         # Same as WEEK_QS but ranked across the entire season rather than per week.
@@ -843,6 +877,9 @@ class ANALYTICS_ENGINE:
                 df_year_matchup_results['YEAR_QS'] += df_year_matchup_results[category].rank(pct=True, ascending=False)
             categories_count += 1
         df_year_matchup_results['YEAR_QS'] = round(df_year_matchup_results['YEAR_QS'] / categories_count * 10,3)
+
+        # and finally, let's put a criteria for playoff / season, for filtering purposes
+        df_year_matchup_results['PLAYOFFS'] = df_year_matchup_results['WEEK'].apply(lambda x: df_weeks[df_weeks['week']==x]['playoff_week'].iloc[0])
 
         os.makedirs(f'{self.current_directory}/analytics_matchups/', exist_ok=True)
         df_year_matchup_results.to_csv(f'analytics_matchups/{self.year}_matchup_data.csv', index=False)
@@ -1109,10 +1146,10 @@ class ANALYTICS_ENGINE:
             df_faabers = trans_df[(trans_df['GM_NAME_DESTINATION']==gm)&(~trans_df['FAAB_BID'].isna())]
             for faaber in df_faabers['NAME'].unique():
                 faab_cost = df_faabers[df_faabers['NAME']==faaber]['FAAB_BID'].iloc[0]
-
+                add_date = df_faabers[df_faabers['NAME']==faaber]['TRANSACTION_DATE'].iloc[0]
                 drop_data = trans_df[(trans_df['NAME']==faaber)&(trans_df['TRANSACTION_TYPE']=='drop')&(trans_df['GM_NAME_SOURCE']==gm)]
-                all_fp = df_stats[(df_stats['NAME']==faaber)]['FP'].sum()
-                all_gp = df_stats[(df_stats['NAME'] == faaber)]['GAME_PLAYED'].sum()
+                all_fp = df_stats[(df_stats['NAME']==faaber)&(df_stats['DATE']>=add_date)]['FP'].sum()
+                all_gp = df_stats[(df_stats['NAME'] == faaber)&(df_stats['DATE']>=add_date)]['GAME_PLAYED'].sum()
                 if len(drop_data)>0:
                     drop_data.sort_values('TRANSACTION_DATE',ascending=True,inplace=True)
                     drop_status = True
