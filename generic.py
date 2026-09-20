@@ -1,3 +1,25 @@
+"""
+generic.py
+
+Core data extraction engine for the fantasy hockey pipeline.
+
+Defines YEAR_INSTANCE — the primary class responsible for all online data
+pulls. Every public method either:
+    - Queries the Yahoo Fantasy Sports API via yfpy, or
+    - Scrapes Hockey Reference (HR) box scores / schedules via requests + BeautifulSoup,
+    - or performs fuzzy name-matching between the two data sources.
+
+Outputs are written as year-partitioned CSVs consumed downstream by
+analytics_engine.py.
+
+External dependencies:
+    yfpy        — Yahoo Fantasy Sports API wrapper
+    rapidfuzz   — fast fuzzy string matching
+    BeautifulSoup — HTML parsing for Hockey Reference scraping
+    duckdb      — SQL layer (imported but reserved for future use)
+    openai      — imported but reserved for future NLP/RAG use
+"""
+
 import unicodedata, re
 try:
     from unidecode import unidecode
@@ -23,10 +45,49 @@ pd.set_option('mode.chained_assignment', None)
 
 class YEAR_INSTANCE:
     """
-    Generic engine for running the code.
+    Extraction engine for a single fantasy hockey season.
+
+    Wraps the Yahoo Fantasy Sports API and Hockey Reference scraper for one
+    configured year. On instantiation, several metadata extractions run
+    automatically so that downstream methods have roster, schedule, and
+    player-mapping data available immediately.
+
+    Attributes:
+        control_file (dict): Full runtime config loaded from control_file.json.
+        year (str|int): The season year being processed (e.g. 2025).
+        stats_for_year (list): Scoring category names for this season.
+        league_id (str): Yahoo league ID for this season.
+        game_id (int): Yahoo game ID for this season.
+        current_directory (str): Absolute path to the project root.
+        dates_to_check (list[str]): ISO date strings to process (YYYY-MM-DD).
+        query (YahooFantasySportsQuery): Authenticated Yahoo API client.
+        schedule_df (pd.DataFrame): NHL game schedule scraped from Hockey Reference.
+        df_league_metadata (pd.DataFrame): League-level metadata from Yahoo.
+        df_league_teams (pd.DataFrame): Team and GM info for this season.
+        df_league_standings (pd.DataFrame): Final standings from Yahoo.
+        df_weeks (pd.DataFrame): Mapping of dates to fantasy weeks.
+        df_matchup_metadata (pd.DataFrame): Head-to-head scoreboard by week.
+        df_player_metadata (pd.DataFrame): Year-filtered player master list.
+        df_otheryear_player_metadata (pd.DataFrame): Player rows for other seasons.
+        master_metadata_file (pd.DataFrame): Combined all-years player master.
+        ref_list (pd.DataFrame): NHL team code reference table.
+        first_name_dict (dict): Common long-form → short-form first name map.
     """
 
     def __init__(self, control_file, current_directory, year, dates_to_check):
+        """
+        Initialize the extraction engine for a given season.
+
+        Authenticates with the Yahoo API, then automatically runs a fixed set
+        of metadata extractions (league info, teams, scoreboard, weeks, standings,
+        NHL schedule, player metadata, and the Yahoo<->HR name mapper).
+
+        Args:
+            control_file (dict): Parsed content of control_file.json.
+            current_directory (str): Absolute path to project root.
+            year (str|int): Season year to process (e.g. 2025).
+            dates_to_check (list[str]): Dates to extract data for (YYYY-MM-DD).
+        """
         self.control_file       = control_file
         self.year               = year
         self.stats_for_year     = self.control_file["Years"][str(self.year)]['scoring_categories']
@@ -36,7 +97,8 @@ class YEAR_INSTANCE:
         self.dates_to_check     = dates_to_check
         print(f'[{time.ctime()}] Initializing instance for Year {self.year} | League ID {self.league_id} | Game ID {self.game_id}')
 
-
+        # Authenticate with Yahoo Fantasy Sports API.
+        # OAuth tokens are stored in the private/ folder and refreshed automatically.
         self.query = YahooFantasySportsQuery(league_id=self.league_id,
                                              game_id=self.game_id,
                                              game_code='nhl',
@@ -48,21 +110,28 @@ class YEAR_INSTANCE:
                                              all_output_as_json_str = False
                                              )
 
+        # Persist the refreshed access token back to the .env file in private/
         self.query.save_access_token_data_to_env_file(
             env_file_location=Path(f"{current_directory}/private"),
             save_json_to_var_only=True
         )
 
-        # run some of the metadata extraction functions
+        # Auto-run fixed metadata extractions on every instantiation.
+        # These populate instance attributes used by all downstream methods.
         self.extract_yahoo_league_metadata()
         self.extract_yahoo_league_teams()
         self.extract_league_scoreboard_by_week()
         self.extract_league_weeks_and_dates()
         self.extract_yahoo_league_standings()
+
+        # NHL team code reference — used for schedule and HR data linking
         self.ref_list = pd.read_csv(f'{self.current_directory}/manual_data/Hockey_Team_Codes.csv')
         self.NHL_schedule_parser()
 
-        # for the mapping portion - have a list of the most common names and their shortforms
+        # Canonical first-name abbreviation map.
+        # Used by fuzzy_match_players_to_hr to normalize names before matching
+        # (e.g. "Alexander Ovechkin" → "Alex Ovechkin") so that HR and Yahoo
+        # name variants resolve to the same normalized form.
         self.first_name_dict  = {
                       "Alexander": "Alex",
                       "Alexandar": "Alex",
@@ -117,19 +186,38 @@ class YEAR_INSTANCE:
 
 
     def extract_player_metadata(self):
+        """
+        Build and maintain the canonical player master list for this season.
+
+        Pulls every player in the Yahoo league for self.year. For any player
+        not already in the master CSV (manual_data/PLAYER_MASTER_DATA.csv),
+        adds a new row with HR_REVIEW_FLAG=True so the name mapper will
+        attempt to link them to a Hockey Reference record.
+
+        After updating the year-slice, calls mapping_hr_to_yh_names() to
+        run fuzzy matching on all unmatched rows, then writes the merged
+        all-years master back to disk.
+
+        Side effects:
+            - Sets self.df_player_metadata (year-filtered player master).
+            - Sets self.df_otheryear_player_metadata (other seasons' rows).
+            - Sets self.master_metadata_file (all-years combined).
+            - Writes manual_data/PLAYER_MASTER_DATA.csv.
+        """
         print(f'[{time.ctime()}] Extracting yahoo player metadata for year {self.year}')
         player_metadata = self.query.get_league_players()
         output_dir = f'{self.current_directory}/player_metadata'
         os.makedirs(output_dir, exist_ok=True)
 
         try:
+            # Attempt to load the existing master file; fall back to empty if missing
             self.df_all_player_metadata = pd.read_csv(f'{self.current_directory}/manual_data/PLAYER_MASTER_DATA.csv')
             print(f'[{time.ctime()}] Successfully loaded PLAYER_MASTER_DATA file ({len(self.df_all_player_metadata)} entries)')
         except:
             self.df_all_player_metadata = pd.DataFrame(columns = ['season','yahoo_name','player_id','HR_MATCH_NAME','HR_LINK_NAME','HR_MATCH_SCORE','HR_REVIEW_FLAG','HR_COLLISION_FLAG'])
             print(f'[{time.ctime()}] Could not find PLAYER_MASTER_DATA file! Creating one now...')
 
-        # Filter down to the appropriate season
+        # Split master into current-year rows (to update) and all other years (to preserve)
         self.df_player_metadata = self.df_all_player_metadata[self.df_all_player_metadata['season']==int(self.year)]
         self.df_otheryear_player_metadata = self.df_all_player_metadata[self.df_all_player_metadata['season']!=int(self.year)]
         print(f'[{time.ctime()}] Filtered master list down to all {self.year} entries: ({len(self.df_player_metadata)} entries)')
@@ -140,39 +228,57 @@ class YEAR_INSTANCE:
             try:
                 player_data = player_metadata[i].clean_data_dict()
             except:
+                # Some years wrap each player in an extra {'player': ...} envelope
                 player_data = player_metadata[i]['player'].clean_data_dict()
                 #print(f'Year {self.year} bugged out trying to extract: {player_data}')
 
             player_id = player_data['player_id']
             yahoo_name = player_data.get('name', {}).get('full', 'UNKNOWN NAME')
+
+            # Skip players already in the master list for this year
             if player_id in self.df_player_metadata['player_id'].values:
                 continue
             else:
+                # New player: add with HR_REVIEW_FLAG=True so the mapper picks them up
                 print(f'Adding {player_id} {yahoo_name} to MASTER DATA LIST')
                 self.df_player_metadata.loc[len(self.df_player_metadata)] = (self.year, yahoo_name,player_id, '', '',np.nan,True,True)
 
-        # RUN THE MAPPER - this will check for unmatched names, run against the latest HR data, and try to update whatever it can.
-        # The function also outputs the year-file to the player_metadata/ folder
+        # Run fuzzy matching against HR data for all unmatched rows in this year
         self.mapping_hr_to_yh_names()
 
-        # Then recreate the megafile once more
+        # Reconstruct the all-years master and write back to disk
         self.master_metadata_file = pd.concat([self.df_player_metadata, self.df_otheryear_player_metadata])
 
 
         self.master_metadata_file.to_csv(f'manual_data/PLAYER_MASTER_DATA.csv', index=False)
 
     def mapping_hr_to_yh_names(self):
+        """
+        Fuzzy-match Yahoo player names to Hockey Reference player names.
+
+        Loads all HR CSVs for self.year, extracts unique PLAYER/HR_LINK_NAME
+        pairs, then runs fuzzy_match_players_to_hr() against any player in
+        self.df_player_metadata where HR_REVIEW_FLAG is True (i.e. not yet
+        confirmed as matched). Logs a warning if any HR name maps to more than
+        one Yahoo player_id (collision).
+
+        Side effects:
+            - Updates self.df_player_metadata with match results.
+            - Sleeps 10 seconds after completion (rate-limit courtesy buffer).
+        """
         print(f'[{time.ctime()}] Running the HR<->yahoo player metadata mapper for year {self.year}')
 
-        # grab all the names and associated metadata for this particular year
+        # Concatenate all per-date HR CSVs for this year into one frame
         df_hr_year = pd.DataFrame()
         for filename in glob.glob(f'{self.current_directory}/hr_data_extract/{self.year}/*.csv', recursive=True):
             hr_df = pd.read_csv(filename)
             df_hr_year = pd.concat([df_hr_year, hr_df], ignore_index=True)
 
+        # Only need the name columns for matching — deduplicate to one row per player
         df_hr_year_just_names = df_hr_year[['PLAYER', 'HR_LINK_NAME']].drop_duplicates().reset_index(drop=True)
         print(f'[{time.ctime()}] Fuzzy-matching yahoo player metadata to HR names for year {self.year}')
-        # THEN do a fuzzy match, but only on the names that we have yet to match -> HR_REVIEW_FLAG = True
+
+        # Split into already-matched (skip) and unmatched (run fuzzy match on)
         df_player_metadata_matched = self.df_player_metadata[self.df_player_metadata['HR_REVIEW_FLAG']==False]
         df_player_metadata_unmatched = self.df_player_metadata[self.df_player_metadata['HR_REVIEW_FLAG']==True]
 
@@ -186,9 +292,11 @@ class YEAR_INSTANCE:
             review_threshold=90
 
         )
+        # Recombine matched and freshly-matched rows
         self.df_player_metadata = pd.concat([df_player_metadata_unmatched, df_player_metadata_matched])
 
-        # now send a notification if there are duplicate HR_MATCH_NAME entries with different player_ids
+        # Warn if the same HR name links to multiple Yahoo player_ids —
+        # this indicates a name collision that needs manual resolution.
         duplicate_hr_matches = self.df_player_metadata.groupby(['HR_LINK_NAME'])['player_id'].nunique()
         duplicate_hr_matches = duplicate_hr_matches[duplicate_hr_matches > 1]
         if not duplicate_hr_matches.empty:
@@ -200,51 +308,46 @@ class YEAR_INSTANCE:
 
     def extract_yahoo_league_metadata(self):
         """
-        Extracts and saves Yahoo Fantasy Sports league metadata as a CSV file.
-        Optimized for performance by directly appending data to the DataFrame.
+        Extract and save Yahoo Fantasy league metadata for self.year.
+
+        Fetches top-level league info (name, start/end dates, num teams, etc.)
+        via the Yahoo API and writes it to league_metadata/<year>_league_metadata.csv.
+
+        Side effects:
+            - Sets self.df_league_metadata.
+            - Creates league_metadata/ directory if absent.
+            - Writes league_metadata/<year>_league_metadata.csv.
         """
-        # Retrieve and clean league metadata
         print(f'[{time.ctime()}] Extracting yahoo league metadata for year {self.year}')
         league_metadata = self.query.get_league_metadata().clean_data_dict()
-        # Create a DataFrame directly from the metadata dictionary
+        # Wrap the single metadata dict in a list so pd.DataFrame produces one row
         self.df_league_metadata = pd.DataFrame([league_metadata])
-        # Ensure the 'league_metadata' directory exists
         output_dir = f'{self.current_directory}/league_metadata'
         os.makedirs(output_dir, exist_ok=True)
-        # Save the DataFrame to a CSV file
         output_file = f'{output_dir}/{self.year}_league_metadata.csv'
         self.df_league_metadata.to_csv(output_file, index=False)
 
     def extract_yahoo_league_teams(self):
         """
-        Extracts and saves Yahoo Fantasy Sports league teams data as a CSV file.
+        Extract and save Yahoo Fantasy league team and GM info for self.year.
 
-        This method retrieves a list of team dictionaries using the YahooFantasySportsQuery object,
-        processes each team's data, and stores it in a pandas DataFrame. The data is then saved
-        to a CSV file in a directory named 'league_teams'. If the directory does not exist, it is created.
+        Fetches the full team list from Yahoo, normalizes GM display names
+        (some GMs have used different Yahoo nicknames across seasons or have
+        deleted accounts), and writes the result to league_teams/<year>_league_teams.csv.
 
-        Attributes:
-            self.league_teams (list): A list of team dictionaries retrieved from the Yahoo API.
-            self.df_league_teams (pd.DataFrame): A DataFrame to store the processed team data.
+        Known API limitation: 2012 data cannot be parsed by yfpy — the pre-built
+        CSV is loaded directly instead.
 
-        CSV Columns:
-            - name: Team name (decoded from UTF-8).
-            - team_id: Unique identifier for the team.
-            - team_key: Key associated with the team.
-            - number_of_moves: Number of moves made by the team.
-            - number_of_trades: Number of trades made by the team.
-            - waiver_priority: Waiver priority of the team.
-            - faab_balance: Free Agent Acquisition Budget balance.
-            - clinched_playoffs: Indicates if the team clinched playoffs (default is 0 if not available).
-            - team_logo_url: URL of the team's logo.
-            - email: Email of the team manager.
-            - felo_score: Felo score of the team manager.
-            - felo_tier: Felo tier of the team manager.
-            - gm_image_url: URL of the general manager's image.
-            - gm_name: Nickname of the general manager.
+        Side effects:
+            - Sets self.df_league_teams.
+            - Creates league_teams/ directory if absent.
+            - Writes league_teams/<year>_league_teams.csv.
+
+        CSV columns:
+            season, name, team_id, team_key, number_of_moves, number_of_trades,
+            waiver_priority, faab_balance, clinched_playoffs, team_logo_url,
+            email, felo_score, felo_tier, gm_image_url, gm_name.
         """
-        # Retrieve and clean league teams data
-
         # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         # 2012 the API CANNOT PARSE THE TEAMS; MANUALLY GENERATE INSTEAD!
         print(f'[{time.ctime()}] Extracting yahoo league team info for year {self.year}')
@@ -254,7 +357,6 @@ class YEAR_INSTANCE:
             return
         # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         league_teams = self.query.get_league_teams()
-        # Prepare a list of team dictionaries for DataFrame creation
         team_data = []
         for team_obj in league_teams:
             team = team_obj.clean_data_dict()
@@ -264,15 +366,19 @@ class YEAR_INSTANCE:
             # This occurs in 2014 when Yusko co-managed with someone else.
             managers = team.get('managers', {})
             if isinstance(managers, list) and managers:
-                manager = managers[0]['manager'].clean_data_dict()  # Access the first manager in the list
+                # Co-manager present — use the first manager in the list
+                manager = managers[0]['manager'].clean_data_dict()
                 print('[extract_yahoo_league_teams] - Co-manager found, using first manager')
             else:
-                manager = managers['manager'].clean_data_dict()  # Assume it's a dictionary or empty
+                manager = managers['manager'].clean_data_dict()
             # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             # Data quality update - force the names of each GM to be the same across seasons
             # Some GMs have different names in different seasons, etc. Some old accounts have been removed and replaced with --hidden--
             gm_name =  manager.get('nickname', '')
             team_name = team.get('name', '').decode('utf-8')
+
+            # Normalize team names / GM nicknames that changed across seasons
+            # or were entered inconsistently. Each block handles one known case.
             if team_name == "Vintage'tingle'Boar":
                 gm_name = 'Tingle'
             elif team_name == "The Nerve":
@@ -330,17 +436,29 @@ class YEAR_INSTANCE:
                 'gm_image_url': manager.get('image_url', '') if isinstance(manager, dict) else '',
                 'gm_name': gm_name
             })
-        # Create a DataFrame from the list of dictionaries
         self.df_league_teams = pd.DataFrame(team_data)
-        # Ensure the 'league_teams' directory exists
         output_dir = f'{self.current_directory}/league_teams'
         os.makedirs(output_dir, exist_ok=True)
 
-        # Save the DataFrame to a CSV file
         output_file = f'{output_dir}/{self.year}_league_teams.csv'
         self.df_league_teams.to_csv(output_file, index=False)
 
     def extract_yahoo_league_standings(self):
+        """
+        Extract and save final league standings for self.year.
+
+        Fetches the Yahoo standings endpoint (which returns teams with win/loss/tie
+        totals and playoff seed), then writes the result sorted by total_points
+        descending to league_standings/<year>_league_standings.csv.
+
+        Known API limitation: 2012 standings cannot be parsed — method returns
+        early without writing anything.
+
+        Side effects:
+            - Sets self.df_league_standings.
+            - Creates league_standings/ directory if absent.
+            - Writes league_standings/<year>_league_standings.csv.
+        """
         print(f'[{time.ctime()}] extracting yahoo league standings for year {self.year}')
 
         # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -351,7 +469,6 @@ class YEAR_INSTANCE:
         # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
         league_standings = self.query.get_league_standings().clean_data_dict()['teams']
-        # League standings are presented as team objects, with additional standings metadata
         team_standings = []
         for team_results_obj in league_standings:
             team_results = team_results_obj['team'].clean_data_dict()
@@ -369,25 +486,43 @@ class YEAR_INSTANCE:
                 'rank': team_results.get('team_standings', {}).get('rank', 0)
             })
 
-        # Create a DataFrame from the list of dictionaries
         self.df_league_standings = pd.DataFrame(team_standings)
-        # Ensure the 'league_standings' directory exists
         output_dir = f'{self.current_directory}/league_standings'
         os.makedirs(output_dir, exist_ok=True)
 
-        # Save the DataFrame to a CSV file
         output_file = f'{output_dir}/{self.year}_league_standings.csv'
+        # Sort best-to-worst by accumulated fantasy points before saving
         self.df_league_standings.sort_values('total_points', ascending=False, inplace=True)
         self.df_league_standings.to_csv(output_file, index=False)
 
     def NHL_schedule_parser(self):
+        """
+        Scrape the full NHL regular-season schedule for self.year from Hockey Reference.
+
+        Fetches the season games table and extracts a URL_KEY per game that is
+        used by parse_HR_data() to build per-game box score URLs.
+
+        The URL_KEY is embedded in hidden HTML cell attributes (csk) and is not
+        present in the standard pandas read_html() output, so a secondary BeautifulSoup
+        pass is required to extract it.
+
+        Side effects:
+            - Sets self.schedule_df (schedule with URL_KEY column).
+            - Creates season_schedules/ directory if absent.
+            - Writes season_schedules/<year>_NHL_Schedule.csv.
+        """
         print(f'[{time.ctime()}] grabbing nhl schedule data from year {self.year}')
+        # HR uses season-end year in the URL (e.g. 2025-26 season → NHL_2026)
         url = f"https://www.hockey-reference.com/leagues/NHL_{int(self.year)+1}_games.html"
         print(url)
         page = requests.get(url)
         soup = BeautifulSoup(page.content, "html.parser")
         tables = soup.find_all('table')
         self.schedule_df = pd.read_html(str(tables[0]))[0]
+
+        # Second pass: extract URL_KEY from hidden 'csk' cell attributes.
+        # The csk attribute contains "HOME.AWAY" codes; when home and away share
+        # a substring, the cell holds the box score key for that game.
         rows = tables[0].find_all(['th', 'tr'])
         row_count = 0
         for row in rows:
@@ -398,15 +533,32 @@ class YEAR_INSTANCE:
                     url_code = cell['csk'].split('.')[1]
                     self.schedule_df.at[row_count, 'URL_KEY'] = url_code
                     row_count += 1
-        # Save the schedule to a CSV file
         output_dir = f'{self.current_directory}/season_schedules'
         os.makedirs(output_dir, exist_ok=True)
         self.schedule_df.to_csv(f'{output_dir}/{self.year}_NHL_Schedule.csv', index=False)
 
     def identical_names_handler(self, df, dbtype):
         """
-        Handles identical player names by appending middle names based on unique identifiers.
+        Disambiguate players who share the exact same name by appending middle names.
+
+        Two known collisions exist in the dataset:
+            - Sebastian Aho (Carolina Hurricanes vs Ottawa Senators)
+            - Elias Pettersson (Vancouver Canucks vs another Pettersson)
+
+        For Yahoo data, disambiguation is by player_id (Yahoo's numeric ID).
+        For Hockey Reference data, disambiguation is by PLAYER_CODE (HR's slug).
+
+        Args:
+            df (pd.DataFrame): Roster or stat DataFrame containing a name column.
+            dbtype (str): Either 'yahoo' (uses PLAYER_ID) or 'hr' (uses PLAYER_CODE)
+                          to select the correct disambiguation key.
+
+        Returns:
+            pd.DataFrame: Input DataFrame with colliding name rows updated in-place
+                          to use the disambiguated middle-name form.
         """
+        # Maps each known duplicate name to the disambiguating key→new-name mapping
+        # for both Yahoo (player_id) and HR (player_code) data sources.
         players_to_update = {
             'yahoo': {
                 'Sebastian Aho': {6777: 'Sebastian Antero Aho', 7654: 'Sebastian Johannes Aho'},
@@ -417,6 +569,7 @@ class YEAR_INSTANCE:
                 'Elias Pettersson': {'petteel01': 'Elias Fredrik Pettersson', 'petteel02': 'Elias Nils Pettersson'}
             }
         }
+        # HR data uses 'PLAYER', Yahoo data uses 'NAME'
         col = 'PLAYER' if dbtype == 'hr' else 'NAME'
         if dbtype in players_to_update:
             for player, updates in players_to_update[dbtype].items():
@@ -441,11 +594,26 @@ class YEAR_INSTANCE:
         return df
 
     def extract_league_weeks_and_dates(self):
+        """
+        Build and save the mapping of calendar dates to fantasy weeks for self.year.
 
+        Expands each game week from the Yahoo API into individual date rows,
+        tagging each date as SEASON, PLAYOFFS, or POST-SEASON based on the
+        scoreboard metadata already extracted.
+
+        Depends on self.df_matchup_metadata being set (via extract_league_scoreboard_by_week)
+        and self.df_league_metadata being set (via extract_yahoo_league_metadata).
+
+        Side effects:
+            - Sets self.df_weeks.
+            - Creates league_weeks_and_dates/ directory if absent.
+            - Writes league_weeks_and_dates/<year>_league_weeks_and_dates.csv.
+        """
         print(f'[{time.ctime()}] extracting league weeks and dates for year {self.year}')
 
         self.game_weeks = self.query.get_game_weeks_by_game_id(self.game_id)
 
+        # end_week from league metadata marks the last regular-season week
         week_max = self.df_league_metadata['end_week'].iloc[0]
         week_arr = []
         for week_data in self.game_weeks:
@@ -454,9 +622,11 @@ class YEAR_INSTANCE:
             week_start = week_data.get('start', '?')
             week_end = week_data.get('end', '?')
 
+            # Tag the week type: playoff weeks appear in the scoreboard;
+            # weeks beyond end_week with no scoreboard entry are post-season filler.
             is_playoff_week = 'PLAYOFFS' if 1 in self.df_matchup_metadata[self.df_matchup_metadata['week'].astype(int)==week]['is_playoff'].unique() else 'POST-SEASON' if week>week_max else 'SEASON'
 
-
+            # Expand each week into one row per calendar date
             date_range = pd.date_range(start=week_start, end=week_end)
             for date in date_range:
                 week_arr.append({
@@ -465,33 +635,42 @@ class YEAR_INSTANCE:
                     'date': date,
                     'playoff_week':is_playoff_week
                 })
-        # Create a DataFrame from the list of dictionaries
         self.df_weeks = pd.DataFrame(week_arr)
         output_dir = f'{self.current_directory}/league_weeks_and_dates'
         os.makedirs(output_dir, exist_ok=True)
 
-        # Save the DataFrame to a CSV file
         output_file = f'{output_dir}/{self.year}_league_weeks_and_dates.csv'
         self.df_weeks.to_csv(output_file, index=False)
 
     def extract_league_scoreboard_by_week(self):
-        # Check the # of weeks for this year
-        # If there are no weeks, return None
+        """
+        Extract and save head-to-head matchup results for every week of self.year.
+
+        Iterates over all weeks found in the existing league_weeks_and_dates CSV
+        (which must already exist on disk). For each week, fetches the Yahoo
+        scoreboard to capture each matchup's two teams, their scores, and the result.
+
+        Side effects:
+            - Sets self.df_matchup_metadata (used by extract_league_weeks_and_dates).
+            - Creates league_scoreboards_by_week/ directory if absent.
+            - Writes league_scoreboards_by_week/<year>_league_scoreboards.csv.
+        """
         print(f'[{time.ctime()}] extracting league scoreboard information for year {self.year}')
 
+        # Requires the weeks CSV to already exist — generated in a prior season setup step
         self.df_weeks = pd.read_csv(f'{self.current_directory}/league_weeks_and_dates/{self.year}_league_weeks_and_dates.csv')
         matchup_arr = []
         for week in self.df_weeks['week'].unique():
             try:
                 week_matchup_data = self.query.get_league_scoreboard_by_week(chosen_week=int(week)).clean_data_dict()['matchups']
             except:
+                # Some seasons have extra "bye" weeks at the end with no matchups
                 print(f'No matchups in week {week} for year {self.year} (likely extra playoff week)')
                 continue
             matchup_count = 0
             for matchup in week_matchup_data:
                 matchup_count +=1
                 matchup_data = matchup['matchup'].clean_data_dict()
-                # Extract the relevant data from the matchup_data dictionary
                 is_consolation = matchup_data.get('is_consolation', 0)
                 is_playoff = matchup_data.get('is_playoffs', 0)
                 week = matchup_data.get('week', 0)
@@ -504,6 +683,7 @@ class YEAR_INSTANCE:
                 team_b_total_points = int(team_b_data.get('team_points', {}).get('total', 0))
                 team_b_key = team_b_data.get('team_key', 'Unknown')
                 team_b_name = team_b_data.get('name', 'Unknown').decode('utf-8')
+                # Derive W/L/T from raw point totals since Yahoo API sometimes omits result
                 team_a_result = 'WIN' if team_a_total_points > team_b_total_points else 'LOSS' if team_a_total_points < team_b_total_points else 'TIE'
                 team_b_result = 'WIN' if team_b_total_points > team_a_total_points else 'LOSS' if team_b_total_points < team_a_total_points else 'TIE'
 
@@ -524,16 +704,30 @@ class YEAR_INSTANCE:
                     'team_b_result': team_b_result
                 })
 
-        # Create a DataFrame from the list of dictionaries
         self.df_matchup_metadata = pd.DataFrame(matchup_arr)
         output_dir = f'{self.current_directory}/league_scoreboards_by_week'
         os.makedirs(output_dir, exist_ok=True)
 
-        # Save the DataFrame to a CSV file
         output_file = f'{output_dir}/{self.year}_league_scoreboards.csv'
         self.df_matchup_metadata.to_csv(output_file, index=False)
 
     def extract_yahoo_transactions(self):
+        """
+        Extract and save all transactions (adds, drops, trades) for self.year.
+
+        Fetches the full transaction log from Yahoo and normalizes each transaction
+        type into a flat row format. add/drop transactions produce one row each;
+        add/drop combos produce two rows; trades produce one row per player/pick moved.
+
+        Outputs to league_transactions/<year>_transactions.csv.
+
+        Side effects:
+            - Writes league_transactions/<year>_transactions.csv.
+
+        Note:
+            Returns early (with a printed warning) if the weeks or teams CSVs
+            are not yet available on disk.
+        """
         print(f'[{time.ctime()}] extracting transaction information for year {self.year}')
 
         df_trans = pd.DataFrame(columns=['season',
@@ -571,7 +765,6 @@ class YEAR_INSTANCE:
             return
 
         transactions = self.query.get_league_transactions()
-        # go through the transactions and parse them
         for i in range(0, len(transactions)):
 
             trans = transactions[i]
@@ -579,8 +772,10 @@ class YEAR_INSTANCE:
             trans_time = datetime.fromtimestamp(trans.timestamp)
             trans_datetime = trans_time.strftime('%Y-%m-%d')
             try:
+                # Map the transaction date back to the fantasy week it occurred in
                 trans_week = df_weeks[df_weeks['date'] == trans_datetime]['week'].values[0]
             except:
+                # Transactions outside the league calendar (e.g. pre-season) get week 0
                 trans_week = 0
 
             trans_id = str(self.year) + "_" + str(trans_week) + "_Trans_" + str(trans.transaction_id)
@@ -590,6 +785,8 @@ class YEAR_INSTANCE:
                 faab_bid = trans.faab_bid
             except:
                 faab_bid = np.nan
+
+            # --- ADD: player picked up from free agency / waivers ---
             if trans_type == 'add':
                 player_id = trans.players[0].player_key
                 player_name = trans.players[0].name.full
@@ -599,13 +796,14 @@ class YEAR_INSTANCE:
                 source = 'Free Agency'
                 source_key = '99.l.99.t.99'
                 source_type = trans.players[0].transaction_data.source_type
+                # Distinguish waiver claims from direct free-agent adds
                 waiver_check = 'YES' if source_type == 'waivers' else 'NO'
                 df_trans.loc[len(df_trans)] = (self.year, trans_week, trans_time, trans_type,
                                                trans_id, trans_status, player_id,
                                                player_name, '','', faab_bid, source, source_key,
                                                destination, destination_key, waiver_check, '', destination_gm, source)
 
-
+            # --- DROP: player released to free agency ---
             elif trans_type == 'drop':
                 player_id = trans.players[0].player_key
                 player_name = trans.players[0].name.full
@@ -622,16 +820,17 @@ class YEAR_INSTANCE:
                                                player_name, '','', '', source, source_key,
                                                destination, destination_key, waiver_check, '',destination,source_gm)
 
+            # --- ADD/DROP: simultaneous add and drop, stored as two separate rows ---
             elif trans_type == 'add/drop':
                 try:
                     faab_bid = trans.faab_bid
                 except:
                     faab_bid = np.nan
 
+                # First player in the list is always the add
                 add = trans.players[0]
                 player_id = add.player_key
                 player_name = add.name.full
-                # add portion
                 destination = add.transaction_data.destination_team_name
                 destination_key = add.transaction_data.destination_team_key
                 destination_gm = self.df_league_teams[self.df_league_teams['team_key']==destination_key]['gm_name'].values[0]
@@ -645,7 +844,7 @@ class YEAR_INSTANCE:
                                                player_name, '','', faab_bid, source, source_key,
                                                destination, destination_key, waiver_check, '',destination_gm, source)
 
-                # drop portion
+                # Second player in the list is always the drop
                 drop = trans.players[1]
                 player_id = drop.player_key
                 player_name = drop.name.full
@@ -665,9 +864,10 @@ class YEAR_INSTANCE:
                                                player_name, '','', '', source, source_key,
                                                destination, destination_key, waiver_check, '',destination,source_gm)
 
+            # --- TRADE: one row per player or draft pick involved ---
             elif trans_type == 'trade':
                 if len(trans.picks) > 0:
-                    # There will always be an even amount of picks
+                    # Process draft picks traded — always an even number
                     for pck in range(0, len(trans.picks)):
                         pick = trans.picks[pck]
                         player_id = '999.p.9999'
@@ -684,6 +884,7 @@ class YEAR_INSTANCE:
                                 og_gm_name = 'Nigel'
                         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+                        # Construct a human-readable pick name: "<next_year> <GM> Round <N> Draft Pick"
                         player_name = str(int(self.year) + 1) + " " + og_gm_name + " " + "Round " + str(
                             pick.round) + " Draft Pick"
                         draft_round = pick.round
@@ -705,7 +906,8 @@ class YEAR_INSTANCE:
                 elif len(trans.players) == 0:
                     continue  # this is likely a stupid 17 for 17 trade
                 elif len(trans.players) == 1:
-                    player = trans.players[0]  # ['player']
+                    # Single-player trade (typically accompanied by picks)
+                    player = trans.players[0]
                     player_id = player.player_key
                     player_name = player.name.full
                     destination = player.transaction_data.destination_team_name
@@ -722,8 +924,9 @@ class YEAR_INSTANCE:
                                                    player_name, '','', '', source, source_key,
                                                    destination, destination_key, waiver_check, '',destination_gm,source_gm)
                 else:
+                    # Multi-player trade: one row per player
                     for plr in range(0, len(trans.players)):
-                        player = trans.players[plr]  # ['player']
+                        player = trans.players[plr]
                         player_id = player.player_key
                         player_name = player.name.full
 
@@ -740,7 +943,8 @@ class YEAR_INSTANCE:
                                                        trans_id, trans_status, player_id,
                                                        player_name, '','', '', source, source_key,
                                                        destination, destination_key, waiver_check, '',destination_gm,source_gm)
-            else:  # this is commish -> i don't know what to do with these
+            else:
+                # Commissioner adjustments — not yet modelled, silently skip
                 trans_status = trans.status
                 trans_time = datetime.fromtimestamp(trans.timestamp)
                 trans_id = str(self.year) + "_" + str(trans_week) + "_" + str(trans.transaction_id)
@@ -749,6 +953,20 @@ class YEAR_INSTANCE:
         df_trans.to_csv(f'{self.current_directory}/league_transactions/{self.year}_transactions.csv', index=False)
 
     def extract_yahoo_draft_results(self):
+        """
+        Extract and save the draft results for self.year.
+
+        Fetches each pick from the Yahoo draft API, resolves player names via
+        the player metadata master, and tags each pick as KEEPER or NO.
+        Draft picks and keeper designations are stored in a single flat CSV
+        formatted identically to the transactions CSV (enabling the two files
+        to be concatenated for unified analysis).
+
+        Side effects:
+            - Sets self.df_draft.
+            - Creates league_drafts/ directory if absent.
+            - Writes league_drafts/<year>_league_draft.csv.
+        """
         print(f'[{time.ctime()}] extracting draft information for year {self.year}')
         draft_arr = []
         df_players = self.df_player_metadata
@@ -761,7 +979,8 @@ class YEAR_INSTANCE:
             pick_number = draft_pick.get('pick', '')
             pick_round = draft_pick.get('round', '')
             player_key = draft_pick.get('player_key', '')
-            player_id = draft_pick.get('player_key', '').split('.')[-1] # grab only the ID part, not the game / year code
+            # The player_key includes a game/year prefix — strip to get just the numeric ID
+            player_id = draft_pick.get('player_key', '').split('.')[-1]
             team_key = draft_pick.get('team_key', '')
             draft_id = str(self.year) + "_0_Draft_" + str(pick_number)
 
@@ -770,15 +989,15 @@ class YEAR_INSTANCE:
             team_name = df_teams[df_teams['team_key'] == team_key]['name'].values[0]
             source_key = '99.l.99.t.99'
             source = 'Free Agency'
-            try: # TO-DO: Change it from player name to the player key
+            try:
+                # Keeper check: look up whether this player is listed as a keeper
+                # in the control_file for this team/year. Falls back to NO for
+                # pre-2018 seasons where keeper data wasn't tracked.
                 keeper_check = 'KEEPER' if player_name in self.control_file['keepers'][str(self.year)][team_key] else 'NO'
             except:
                 # for years 2017 and back
                 keeper_check = 'NO'
 
-            # # Grab some additional draft metadata analytics # Todo: Is there anything useful here?
-            # draft_analytics = self.query.get_player_draft_analysis(player_key).clean_data_dict()
-            # time.sleep(0.5)
             draft_arr.append({
                 'season': self.year,
                 'week': 0,
@@ -800,45 +1019,49 @@ class YEAR_INSTANCE:
                 'GM_Name_source': 'Free Agency'
 
             })
-        #print(draft_pick, draft_time, draft_type, pick_number, pick_round, player_id, team_key, player_name, gm_name, team_name, source_key, source, source, keeper_check)
 
-        # Create a DataFrame from the list of dictionaries
         self.df_draft = pd.DataFrame(draft_arr)
         output_dir = f'{self.current_directory}/league_drafts'
         os.makedirs(output_dir, exist_ok=True)
 
-        # Save the DataFrame to a CSV file
         output_file = f'{output_dir}/{self.year}_league_draft.csv'
         self.df_draft.columns = self.df_draft.columns.str.upper()
         self.df_draft.to_csv(output_file, index=False)
 
     def extract_yahoo_rosters(self):
+        """
+        Extract and save each team's daily roster and lineup positions for all dates in self.dates_to_check.
+
+        For each date, queries Yahoo for every team's roster on that day, capturing
+        the player's selected fantasy slot (C, LW, BN, IR+, etc.), injury notes,
+        and ownership percentages. Stats are intentionally excluded here —
+        they are pulled more accurately from Hockey Reference via parse_HR_data().
+
+        One CSV is written per date to team_rosters_by_date/<year>/<year>_rosters_<date>.csv.
+
+        Side effects:
+            - Creates team_rosters_by_date/<year>/ directory if absent.
+            - Writes one CSV per date.
+            - Sleeps 10 seconds between dates to respect Yahoo API rate limits.
+        """
         print(f'[{time.ctime()}] Getting yahoo team roster player info for year {self.year}')
         df_teams = pd.read_csv(f'{self.current_directory}/league_teams/{self.year}_league_teams.csv')
-        # Cycle through each date in the league weeks and dates DataFrame
-        # and get the roster for each team on that date
         for date in self.dates_to_check:
             iter_date = date
             print(f'[{time.ctime()}] Processing date: {iter_date}')
             date_arr = []
             df_roster_stats_date = pd.DataFrame()
-            # Get the teams for this date
             for team_code in df_teams['team_id'].unique():
                 team_id = df_teams[df_teams['team_id'] == team_code]['team_key'].values[0]
                 team_name = df_teams[df_teams['team_id'] == team_code]['name'].values[0]
                 team_gm = df_teams[df_teams['team_id'] == team_code]['gm_name'].values[0]
-                # Get the roster for this team on this date
                 roster = self.query.get_team_roster_player_info_by_date(team_id=team_code, chosen_date=iter_date)
                 if not roster:
                     print(f'No roster found for team {team_code} on date {iter_date}')
                     continue
-                # Process the roster and save it to a file or database
-                # lets create a DataFrame to store the roster data into a csv
                 for player in roster:
                     player_daily_metadata = player.clean_data_dict()
                     player_metadata_dict = {}
-                    # extract the relevant data from the player_data dictionary
-                    # there is a lot of metadata in addition to the stats, so we might split these off eventually
 
                     player_metadata_dict={
                         'SEASON': self.year,
@@ -847,9 +1070,6 @@ class YEAR_INSTANCE:
                         'PLAYER_KEY': player_daily_metadata.get('player_key', '?'),
                         'DISPLAY_POSITION': player_daily_metadata.get('display_position', '?'),
                         'INJURY_NOTE': player_daily_metadata.get('injury_note', ''),
-                        #'IS_KEEPER': player_daily_metadata.get('is_keeper', {}).get('status', False),
-                        #'KEEPER_COST': player_daily_metadata.get('is_keeper', {}).get('cost', ''),
-                        # 'KEPT': player_daily_metadata.get('is_keeper', {}).get('kept', ''),
                         'OWNER_TEAM_KEY': team_id,
                         'OWNER_TEAM_NAME': team_name,
                         'OWNER_TEAM_GM': team_gm,
@@ -859,15 +1079,13 @@ class YEAR_INSTANCE:
                         'PERCENT_OWNED_DELTA': player_daily_metadata.get('percent_owned', {}).get('delta', 0.0),
                     }
                     # No need for stats, I will grab them from the fine folks at hockeyreference
-                    # # Loop through and grab the stats for this player
-                    # convert the player_metadata_and_stats_arr to a DataFrame
                     date_arr.append(player_metadata_dict)
 
             date_df = pd.DataFrame(date_arr)
+            # Handle the two known same-name player collisions before saving
             date_df = self.identical_names_handler(date_df, 'yahoo') if len(date_df) > 0 else date_df
             output_dir = f'{self.current_directory}/team_rosters_by_date/{self.year}'
             os.makedirs(output_dir, exist_ok=True)
-            # Save the DataFrame to a CSV file
             output_file = f"{output_dir}/{self.year}_rosters_{iter_date}.csv"
             date_df['DATE'] = iter_date
             date_df.to_csv(output_file, index=False)
@@ -877,9 +1095,27 @@ class YEAR_INSTANCE:
             date_df['RUNDATE'] = time.ctime()
             date_df.drop(columns=['PLAYER_KEY'], inplace=True)
             date_df = date_df.rename(columns={'OWNER_TEAM_KEY':'OWNER_TEAM_ID'})
-            #self.insert_roster_metadata(date_df, iter_date, overwrite=False)
 
     def parse_HR_data(self):
+        """
+        Scrape per-player box score stats from Hockey Reference for all dates in self.dates_to_check.
+
+        For each date, looks up the corresponding NHL games from self.schedule_df
+        (populated by NHL_schedule_parser), then scrapes each game's box score page
+        to extract:
+            - Skater stats: G, A, PTS, +/-, PIM, PP/SH goals & assists, shots, TOI, advanced metrics
+            - Goalie stats: DEC (W/L/OTL), GA, SA, SV, SV%, SO
+
+        Home and away team stats are extracted from separate HTML tables, merged,
+        and written to hr_data_extract/<year>/HR_<date>.csv.
+
+        A 5-second sleep between individual game requests and a 30-second sleep
+        between dates are included to avoid overwhelming Hockey Reference's servers.
+
+        Side effects:
+            - Creates hr_data_extract/<year>/ directory if absent.
+            - Writes hr_data_extract/<year>/HR_<date>.csv per date.
+        """
         import os
         import time
         import requests
@@ -896,13 +1132,16 @@ class YEAR_INSTANCE:
                 soup = BeautifulSoup(page.content, "html.parser")
                 tables = soup.find_all('table')
 
-                # Grab home team skater normal, advanced stats & goalie stats
-
+                # --- Home team skater stats ---
+                # Table index 2: home team skaters (basic + goals breakdown)
                 home_df = pd.read_html(StringIO(str(tables[2])))[0]
+                # Flatten the two-level header: keep 'Goals'/'Assists' labels, blank others
                 home_df = home_df.rename(columns=lambda x: x if x in ['Goals', 'Assists'] else '', level=0)
                 home_df.columns = [f"{col[0]}{col[1]}" for col in home_df.columns]
                 home_df['TEAM'] = tables[2]['id'].split('_')[0]
-                # get some metadata from the table and add it in
+
+                # Extract HR_LINK_NAME from hidden data-append-csv cell attributes —
+                # this is the slug used to uniquely identify each player in HR URLs.
                 rows = tables[2].find_all(['th', 'tr'])
                 row_count = 0
                 for row in rows:
@@ -913,21 +1152,24 @@ class YEAR_INSTANCE:
                             home_df.at[row_count, 'HR_LINK_NAME'] = link_name
                             row_count += 1
 
+                # Table index 6: home team advanced skater stats (CF%, etc.)
                 adv_df = pd.read_html(StringIO(str(tables[6])))[0]
                 home_df = home_df.merge(adv_df, how='left', on='Player')
+
+                # Table index 3: home team goalie stats
                 goalie_df = pd.read_html(StringIO(str(tables[3])))[0]
                 goalie_df.columns = [f"{col[1]}" for col in goalie_df.columns]
                 goalie_df.drop(columns=['Rk', 'PIM', 'TOI'], inplace=True)
                 home_df = home_df.merge(goalie_df, how='left', on='Player')
+                # Remove the TOTAL row that HR appends at the bottom of each table
                 home_df = home_df[home_df['Player'] != 'TOTAL']
 
-                # Grab away team skater normal, advanced stats & goalie stats
-
+                # --- Away team skater stats ---
+                # Table index 4: away team skaters (same structure as home)
                 away_df = pd.read_html(StringIO(str(tables[4])))[0]
                 away_df = away_df.rename(columns=lambda x: x if x in ['Goals', 'Assists'] else '', level=0)
                 away_df.columns = [f"{col[0]}{col[1]}" for col in away_df.columns]
                 away_df['TEAM'] = tables[4]['id'].split('_')[0]
-                # get some metadata from the table and add it in
                 rows = tables[4].find_all(['th', 'tr'])
                 row_count = 0
                 for row in rows:
@@ -938,20 +1180,26 @@ class YEAR_INSTANCE:
                             away_df.at[row_count, 'HR_LINK_NAME'] = link_name
                             row_count += 1
 
+                # Table index 13: away team advanced stats
                 adv_df = pd.read_html(StringIO(str(tables[13])))[0]
                 away_df = away_df.merge(adv_df, how='left', on='Player')
+
+                # Table index 5: away team goalie stats
                 goalie_df = pd.read_html(StringIO(str(tables[5])))[0]
                 goalie_df.columns = [f"{col[1]}" for col in goalie_df.columns]
                 goalie_df.drop(columns=['Rk', 'PIM', 'TOI'], inplace=True)
                 away_df = away_df.merge(goalie_df, how='left', on='Player')
                 away_df = away_df[away_df['Player'] != 'TOTAL']
 
+                # Combine home and away into one frame for the game
                 merge_df = pd.concat([home_df, away_df]).reset_index(drop=True)
                 merge_df.drop(columns=['Rk'], inplace=True)
                 date_df = pd.concat([date_df, merge_df]).reset_index(drop=True)
                 print(f'Completed extraction for game {url_code} on date {date}')
                 time.sleep(5)  # Be polite and avoid overwhelming the server
 
+            # Ensure all expected columns exist even if absent from today's box scores
+            # (e.g. no shutouts → SO column may be missing)
             for col in ['PLAYER',	'G',	'A',	'PTS',	'+/-',	'PIM',	'GOALSEV'	,'GOALSPP'	,'GOALSSH',	'GOALSGW',	'ASSISTSEV'	,'ASSISTSPP',	'ASSISTSSH',	'S'	,'S%',	'SHFT',	'TOI',	'TEAM',	'HR_LINK_NAME',	'ICF',	'SAT‑F',	'SAT‑A',	'CF%',	'CREL%',	'ZSO',	'ZSD',	'OZS%',	'HIT',	'BLK',	'DEC',	'GA',	'SA',	'SV',	'SV%',	'SO']:
                 if col not in date_df.columns.to_list():
                     date_df[col] = ''
@@ -960,7 +1208,8 @@ class YEAR_INSTANCE:
             season = int(self.year)
             date_df['SEASON'] = season
             date_df.columns = date_df.columns.str.strip().str.upper()
-            # Add a dedeuplication line on the hr_link_column
+            # Deduplicate on HR_LINK_NAME — skaters who played on two teams in one
+            # day (rare) or any scraping artifact rows
             date_df.drop_duplicates('HR_LINK_NAME', keep='first', inplace=True)
             os.makedirs(f"hr_data_extract/{season}", exist_ok=True)
             date_df.to_csv(f'hr_data_extract/{season}/HR_{date}.csv', index=False)
@@ -985,12 +1234,42 @@ class YEAR_INSTANCE:
             review_threshold=90
     ):
         """
-        Fuzzy-match player names to HR master names with:
-        - aggressive normalization (ASCII only)
-        - HR_NAME + HR_LINK_NAME lookup
-        - collision detection
-        - review flagging
-        - optimized RapidFuzz matching
+        Fuzzy-match Yahoo player names against Hockey Reference player names.
+
+        Uses RapidFuzz token_sort_ratio scoring with aggressive ASCII normalization
+        and first-name abbreviation substitution to handle common spelling variants
+        (e.g. "Alexander" → "Alex", accented characters stripped). Flags any match
+        below review_threshold for manual review and detects collisions where the
+        same HR name was matched to multiple Yahoo players.
+
+        Args:
+            player_df (pd.DataFrame): Yahoo player rows to be matched. Only
+                rows with HR_REVIEW_FLAG=True should be passed in.
+            hr_df (pd.DataFrame): Reference DataFrame containing HR player names
+                and their URL slugs.
+            player_name_col (str): Column in player_df containing Yahoo display names.
+            hr_name_col (str): Column in hr_df containing HR display names.
+            hr_link_name_col (str): Column in hr_df containing HR URL slugs (e.g. "crosbsi01").
+            output_match_col (str): Name of the column to write matched HR display names into.
+                Defaults to "HR_MATCH_NAME".
+            output_link_col (str): Name of the column to write matched HR slugs into.
+                Defaults to "HR_LINK_NAME".
+            output_score_col (str): Name of the column to write fuzzy match scores into.
+                Defaults to "HR_MATCH_SCORE".
+            collision_flag_col (str): Name of the column to write collision flags into.
+                Defaults to "HR_COLLISION_FLAG".
+            review_flag_col (str): Name of the column to write review flags into.
+                Defaults to "HR_REVIEW_FLAG". Set to True if score < review_threshold
+                or if no match was found above score_cutoff.
+            score_cutoff (int): Minimum fuzzy score (0-100) for a match to be
+                considered at all. Defaults to 80.
+            review_threshold (int): Minimum score (0-100) for a match to be
+                considered confirmed (HR_REVIEW_FLAG=False). Defaults to 90.
+
+        Returns:
+            pd.DataFrame: A copy of player_df with match results written into the
+                output columns. The "_norm_player_name" working column is removed
+                before returning.
         """
 
         import re
@@ -1002,9 +1281,12 @@ class YEAR_INSTANCE:
         except ImportError:
             raise ImportError("RapidFuzz is required. Install via: pip install rapidfuzz")
 
-        # -------------------------------
+        # -------------------------------------------------------------------
         # HARD normalization (ASCII only)
-        # -------------------------------
+        # Converts accented characters, applies first-name abbreviations,
+        # lowercases, removes all non-alphabetic characters, and collapses
+        # internal whitespace. Produces a canonical form for fuzzy comparison.
+        # -------------------------------------------------------------------
         def normalize(name):
             if pd.isna(name):
                 return ""
@@ -1012,27 +1294,29 @@ class YEAR_INSTANCE:
             name = str(name)
             first_name = name.split(' ', 1)[0]
             last_part = name.split(' ', 1)[1]
+            # Substitute long-form first names with their common short form
             first_name = self.first_name_dict[first_name] if first_name in self.first_name_dict.keys() else first_name
             name = first_name + ' ' + last_part
 
-            # Remove accents / diacritics
+            # Strip diacritics (é → e, ø → o, etc.)
             name = unicodedata.normalize("NFKD", name)
             name = name.encode("ascii", "ignore").decode("ascii")
 
-            # Lowercase
             name = name.lower()
 
-            # Keep only letters + spaces
+            # Remove anything that isn't a letter or space
             name = re.sub(r"[^a-z\s]", " ", name)
 
-            # Collapse whitespace
+            # Collapse multiple spaces into one
             name = re.sub(r"\s+", " ", name).strip()
 
             return name
 
-        # -------------------------------
-        # Prepare HR lookup tables
-        # -------------------------------
+        # -------------------------------------------------------------------
+        # Build HR lookup tables
+        # Normalize all HR names and create a dict keyed by normalized name
+        # for O(1) retrieval after fuzzy matching resolves the best match.
+        # -------------------------------------------------------------------
         hr_df = hr_df.copy()
         hr_df["_norm_hr_name"] = hr_df[hr_name_col].apply(normalize)
 
@@ -1046,9 +1330,11 @@ class YEAR_INSTANCE:
 
         hr_norm_names = list(hr_lookup.keys())
 
-        # -------------------------------
-        # Fuzzy match function
-        # -------------------------------
+        # -------------------------------------------------------------------
+        # Single-name fuzzy match function
+        # Returns (HR display name, HR slug, match score) or (None, None, None)
+        # if no match exceeds score_cutoff.
+        # -------------------------------------------------------------------
         def match_one(norm_name):
             if not norm_name:
                 return None, None, None
@@ -1070,32 +1356,25 @@ class YEAR_INSTANCE:
                 score
             )
 
-        # -------------------------------
-        # Normalize player names
-        # -------------------------------
+        # Normalize all Yahoo player names in the input DataFrame
         df = player_df.copy()
         df["_norm_player_name"] = df[player_name_col].apply(normalize)
 
-        # -------------------------------
-        # Perform matching
-        # -------------------------------
+        # Apply match_one to every row and unpack the three-tuple results
         results = df["_norm_player_name"].apply(match_one)
 
         df[output_match_col] = results.apply(lambda x: x[0])
         df[output_link_col] = results.apply(lambda x: x[1])
         df[output_score_col] = results.apply(lambda x: x[2])
 
-        # -------------------------------
-        # Review flag
-        # -------------------------------
+        # Flag for review: no match found, or match score below confidence threshold
         df[review_flag_col] = (
                 df[output_score_col].isna() |
                 (df[output_score_col] < review_threshold)
         )
 
-        # -------------------------------
-        # Collision detection
-        # -------------------------------
+        # Collision detection: if the same HR name was matched to more than one
+        # Yahoo player_id, both rows get collision_flag=True for manual review.
         collision_counts = (
             df
             .dropna(subset=[output_match_col])
@@ -1107,14 +1386,7 @@ class YEAR_INSTANCE:
 
         df[collision_flag_col] = df[output_match_col].isin(collisions)
 
-        # -------------------------------
-        # Cleanup
-        # -------------------------------
+        # Remove the internal working column before returning
         df.drop(columns=["_norm_player_name"], inplace=True)
 
         return df
-
-
-
-
-
