@@ -42,7 +42,7 @@ analytics_power_ranks/
 venv/
 sql_tables/
 team_stats_by_date/
-
+CLAUDE.md
 # Python
 __pycache__/
 *.pyc
@@ -61,4 +61,3 @@ chroma_store/
 # PyCharm
 .idea/
 
-CLAUDE.md
